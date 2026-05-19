@@ -295,9 +295,10 @@ def create_sampling_ui(stable_audio_3_model, default_prompt=None):
         with gr.Column(scale=6):
             prompt = gr.Textbox(show_label=False, placeholder="Prompt", value=default_prompt)
             negative_prompt = gr.Textbox(show_label=False, placeholder="Negative prompt")
-        with gr.Column(scale=1, min_width=160):
-            download_prompt_assistant_button = gr.Button("Download Prompt Assistant (~4.2 GB)", visible=not _reprompt_cached)
-            prompt_assistant_button = gr.Button("Prompt Assistant", interactive=_reprompt_cached)
+        prompt_assistant_button = gr.Button(
+            "Prompt Assistant" if _reprompt_cached else "Download Prompt Assistant (~4.2 GB)",
+            scale=1
+        )
         generate_button = gr.Button("Generate", variant='primary', scale=1)
 
     with gr.Row(equal_height=False):
@@ -535,12 +536,11 @@ def create_sampling_ui(stable_audio_3_model, default_prompt=None):
         ],
         api_name="generate")
 
-    def _download_prompt_assistant(progress=gr.Progress(track_tqdm=True)):
-        progress(0.0, desc="Downloading prompt assistant model…")
-        _reprompt_get_model(_reprompt_model_id)
-        return gr.update(visible=False), gr.update(interactive=True)
-
-    def _prompt_assistant(text, progress=gr.Progress(track_tqdm=True)):
+    def _prompt_assistant_or_download(text, progress=gr.Progress(track_tqdm=True)):
+        if not _reprompt_is_model_cached(_reprompt_model_id):
+            progress(0.0, desc="Downloading prompt assistant model…")
+            _reprompt_get_model(_reprompt_model_id)
+            return text, gr.update(), gr.update(value="Prompt Assistant")
         _, result, _ = _reprompt_fn(text, "Auto", "", _reprompt_model_id, 128, 1.11)
         m = _LENGTH_EXTRACT_RE.search(result)
         if m:
@@ -549,14 +549,13 @@ def create_sampling_ui(stable_audio_3_model, default_prompt=None):
             result = result[:m.start()]
         else:
             seconds = gr.update()
-        return result, seconds
+        return result, seconds, gr.update()
 
-    download_prompt_assistant_button.click(
-        fn=_download_prompt_assistant,
-        inputs=[],
-        outputs=[download_prompt_assistant_button, prompt_assistant_button]
+    prompt_assistant_button.click(
+        fn=_prompt_assistant_or_download,
+        inputs=[prompt],
+        outputs=[prompt, seconds_total_slider, prompt_assistant_button]
     )
-    prompt_assistant_button.click(fn=_prompt_assistant, inputs=[prompt], outputs=[prompt, seconds_total_slider])
 
 def create_diffusion_cond_ui(model, gradio_title="", default_prompt=None):
     global sample_size, sample_rate, stable_audio_3_model
