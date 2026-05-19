@@ -1,7 +1,7 @@
 # Stable Audio 3 Inference Methods
 An overview of the different inference modes. The python interface is shown, but these controls are the same as for the gradio interface
 
-> New to diffusion/RF models? See [Model Overview](../guides/how-inference-works.md)
+> New to diffusion/Flow Matching models? See [Model Overview](../guides/how-inference-works.md)
 > for a conceptual overview before diving in.
 
 ## Loading the Model
@@ -219,7 +219,7 @@ model.set_lora_strength(0.0)              # Disable without unloading
 model.set_lora_strength(1.0, lora_index=0)
 model.set_lora_strength(0.3, lora_index=1)
 
-# Target only the DiT backbone or conditioner independently:
+# Target only the Diffusion Transformer backbone or conditioner independently:
 model.set_lora_strength(1.0, target="dit")
 model.set_lora_strength(0.0, target="conditioner")
 ```

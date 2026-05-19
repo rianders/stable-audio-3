@@ -2,7 +2,7 @@
 
 **A state-of-the-art open platform for fast, high-quality generated audio and music.**
 
-[Technical Report](https://arxiv.org/abs/2605.17991) · [Blog Post]() · [🤗 Models](https://huggingface.co/collections/stabilityai/stable-audio-3) · [🤗 Extra Models](https://huggingface.co/collections/stabilityai/stable-audio-3-extra) · [Discord](https://discord.gg/cKpvjey8b)
+[Technical Report](https://arxiv.org/abs/2605.17991) · [Blog Post](TODO) · [🤗 Models](https://huggingface.co/collections/stabilityai/stable-audio-3) · [🤗 Extra Models](https://huggingface.co/collections/stabilityai/stable-audio-3-extra) · [Discord](https://discord.gg/cKpvjey8b)
 
 ![Stable Audio 3 Architecture](stable-audio-3.png)
 
@@ -19,11 +19,11 @@ Stable Audio 3 is the next generation of Stable Audio: a focused, streamlined pl
 | [**Stable Audio 3 Small-Music**](https://huggingface.co/stabilityai/stable-audio-3-small-music) | `small-music` | SAME-Small | CPU | 433M | 120s | Lightweight music-only inference, no GPU required |
 | [**Stable Audio 3 Small-SFX**](https://huggingface.co/stabilityai/stable-audio-3-small-sfx) | `small-sfx` | SAME-Small | CPU | 433M | 120s | Lightweight sound effects-only inference, no GPU required |
 | [**Stable Audio 3 Medium**](https://huggingface.co/stabilityai/stable-audio-3-medium) | `medium` | SAME-Large | GPU (CUDA) | 1.4B | 380s | High Quality, Fast Inference |
-| **Stable Audio 3 Large** | — | SAME-Large | API only | 2.7B | 380s | Highest quality, API only. Not supported by this repo, see the [API docs](#) |
+| **Stable Audio 3 Large** | — | SAME-Large | API only | 2.7B | 380s | Highest quality, API only. Not supported by this repo, see the [API docs](TODO) |
 
 Base (un-post-trained) checkpoints, the SAME autoencoders, and optimized variants are available in the [Extra Models collection](https://huggingface.co/collections/stabilityai/stable-audio-3-extra).
 
-### Performance (TODO: finish this)
+### Performance
 
 | Model | Duration | H200 | H200 + TensorRT | Mac CPU* | Mac CoreML* | Peak VRAM† |
 |---|---|---|---|---|---|---|
@@ -35,7 +35,7 @@ Base (un-post-trained) checkpoints, the SAME autoencoders, and optimized variant
 | `medium` | 120s | 0.78s | 0.13s | – | – | 6.49 GB |
 | `medium` | 380s | 1.31s | 0.43s | – | – | 6.52 GB |
 
-\* CPU-only via CoreML (DiT) + TFLite (SAME-S decoder)
+\* CPU-only via CoreML (Diffusion Transformer) + TFLite (SAME-S decoder)
 † Peak allocated VRAM on H200, unchunked decode. Chunked decoding reduces this — e.g. `medium` at 120s drops from 6.49 GB to ~5.14 GB.
 
 ---
@@ -132,7 +132,7 @@ from stable_audio_3 import StableAudioModel
 model = StableAudioModel.from_pretrained("medium")
 audio = model.generate(
     prompt="House music that encapsulates the feeling of being at a festival in the sunny weather with all your friends 124 BPM",
-    duration=180,
+    duration=250,
 )
 ```
 

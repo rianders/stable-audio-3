@@ -176,11 +176,11 @@ Multiple LoRAs can use different adapter types (e.g., one standard LoRA and one 
 
 When LoRA checkpoints are loaded, the Gradio interface shows per-LoRA controls. Each LoRA gets its own collapsible accordion with independent settings:
 
-### LoRA DiT Strength
+### LoRA Diffusion Transformer Strength
 Controls the strength of the LoRA effect on the diffusion model backbone. Default is 1.0 (full effect). Setting to 0 disables the LoRA entirely; values above 1.0 amplify the effect. Range: 0.0 - 10.0.
 
 ### LoRA Conditioner Strength
-Controls the LoRA effect on the text conditioner independently from the DiT. Default is 1.0. This allows you to, for example, keep the LoRA effect on the conditioner while reducing it on the backbone.
+Controls the LoRA effect on the text conditioner independently from the Diffusion Transformer. Default is 1.0. This allows you to, for example, keep the LoRA effect on the conditioner while reducing it on the backbone.
 
 ### LoRA Interval
 Controls when LoRA is active during the sampling process based on the noise level (sigma). The interval is specified as `[min, max]` where both are in the range 0.0 to 1.0.
@@ -205,8 +205,8 @@ Layers matching any filter substring are disabled; all other LoRA layers remain 
 
 With two LoRAs loaded, you could configure them independently:
 
-- **LoRA 1 (style)**: DiT strength 1.0, interval `[0.0, 1.0]` (active everywhere)
-- **LoRA 2 (detail)**: DiT strength 0.5, interval `[0.0, 0.5]` (active only in later denoising steps)
+- **LoRA 1 (style)**: Diffusion Transformer strength 1.0, interval `[0.0, 1.0]` (active everywhere)
+- **LoRA 2 (detail)**: Diffusion Transformer strength 0.5, interval `[0.0, 0.5]` (active only in later denoising steps)
 
 Each LoRA's interval and layer filter are evaluated independently at each sampling step. A LoRA is enabled for a step only if the current sigma falls within its interval.
 
@@ -229,7 +229,7 @@ Stable Audio 3 supports a family of adapter types that trade off expressiveness 
 | **dora-cols-xs** | `rank² + fan_in` | DoRA-cols + LoRA-XS. Frozen SVD bases plus per-column magnitude. |
 | **bora-xs** | `rank² + fan_in + fan_out` | BoRA + LoRA-XS. Frozen SVD bases plus both row and column magnitudes. |
 
-LoRA is applied to both the diffusion backbone (DiT) and the conditioner (only trainable parameters like the `seconds_total` conditioner).
+LoRA is applied to both the diffusion backbone and the conditioner (only trainable parameters like the `seconds_total` conditioner).
 
 ## LoRA (Standard)
 

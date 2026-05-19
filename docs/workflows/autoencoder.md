@@ -1,6 +1,6 @@
-# Autoencoder
+# Autoencoder [![arXiv](https://img.shields.io/badge/arXiv-2605.18613-b31b1b.svg)](https://arxiv.org/abs/2605.18613)
 
-Stable Audio 3 uses a 44.1k stereo audio autoencoder to compress waveforms into a compact continuous latent representation that the diffusion model operates on. This page covers how to use the autoencoder directly, for encoding individual audio files, decoding latents back to audio, and pre-encoding a dataset for training.
+Stable Audio 3 uses a 44.1k stereo audio autoencoder known as SAME to compress waveforms into a compact continuous latent representation that the diffusion model operates on. This page covers how to use the autoencoder directly, for encoding individual audio files, decoding latents back to audio, and pre-encoding a dataset for training.
 
 ## Encoding audio to latents
 
