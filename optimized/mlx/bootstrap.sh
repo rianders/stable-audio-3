@@ -7,7 +7,7 @@
 #
 # Usage:
 #   curl -LsSf https://raw.githubusercontent.com/Stability-AI/stable-audio-3/main/optimized/mlx/bootstrap.sh | bash
-#   curl -LsSf https://raw.githubusercontent.com/Stability-AI/stable-audio-3/main/optimized/mlx/bootstrap.sh | bash -s -- --prompt "ambient drone" --dit medium --decoder same-l
+#   curl -LsSf https://raw.githubusercontent.com/Stability-AI/stable-audio-3/main/optimized/mlx/bootstrap.sh | bash -s -- --prompt "Death Metal" --dit medium --decoder same-l
 #
 # Default demo prompt is "Epic orchestral buildup".
 #
