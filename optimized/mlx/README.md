@@ -1,7 +1,16 @@
 # sa3_mlx — Stable Audio 3 in pure MLX
 
+```bash
+curl -LsSf https://raw.githubusercontent.com/Stability-AI/stable-audio-3/main/optimized/mlx/bootstrap.sh | bash
+```
+
+That one line on a fresh Apple Silicon Mac installs everything and plays
+back ~2 minutes of "Epic orchestral buildup".
+
 Apple-Silicon-native inference for **Stable Audio 3**, with no PyTorch,
 transformers, or stable-audio-tools at runtime.
+
+If you've already cloned the repo:
 
 ```bash
 ./install.sh                                              # one-time setup
