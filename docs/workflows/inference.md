@@ -22,7 +22,7 @@ The first argument selects the model to load. Available models:
 | `small-music-base` | Base |
 | `small-sfx-base` | Base |
 
-> **Note:** `medium` and `medium-base` require a CUDA GPU with Flash Attention support.
+> **Note:** `medium` and `medium-base` require a CUDA GPU with Flash Attention support due to using SAME-L as their autoencoder.
 
 ## Text-to-Audio
 The most common usage is generating audio from text
@@ -79,7 +79,7 @@ audio = model.generate(
 The other controls for text to audio are the same, however the `prompt` is now used to control how the audio will be edited. The [Prompt Guide](../guides/prompting.md) has some examples for this.
 
 ## Inpainting/Continuation
-Inpainting lets you regenerate a specific region of an existing audio file while keeping the rest intact, useful for fixing a section, swapping out a sound, or extending a loop.
+Inpainting lets you regenerate a specific region of an existing audio file while keeping the rest intact, useful for fixing a section, swapping out a sound, or extending a loop. It uses the surrounding context along with your text prompt to determine what to create.
 
 ```python
 import torchaudio
