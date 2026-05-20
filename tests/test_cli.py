@@ -192,15 +192,29 @@ def test_output_batch_naming(mock_torchaudio_save, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_batch_per_batch_prompts(mock_torchaudio_save):
+def test_batch_per_batch_prompts_infers_batch_size():
+    model = _make_model_mock(batch=3)
+    with patch(
+        "stable_audio_3.cli.StableAudioModel.from_pretrained", return_value=model
+    ):
+        _run(["-p", "p1", "p2", "p3"])  # no --batch-size; should be auto-inferred as 3
+    kwargs = model.generate.call_args.kwargs
+    assert kwargs["prompt"] == ["p1", "p2", "p3"]
+    assert kwargs["batch_size"] == 3
+
+
+def test_batch_explicit_batch_size_matches_prompts():
     model = _make_model_mock(batch=3)
     with patch(
         "stable_audio_3.cli.StableAudioModel.from_pretrained", return_value=model
     ):
         _run(["-p", "p1", "p2", "p3", "--batch-size", "3"])
-    kwargs = model.generate.call_args.kwargs
-    assert kwargs["prompt"] == ["p1", "p2", "p3"]
-    assert kwargs["batch_size"] == 3
+    assert model.generate.call_args.kwargs["batch_size"] == 3
+
+
+def test_batch_prompt_count_mismatch_fails():
+    with pytest.raises(SystemExit):
+        _run(["-p", "p1", "p2", "p3", "--batch-size", "2"])
 
 
 def test_batch_per_batch_durations(mock_torchaudio_save):
@@ -208,9 +222,14 @@ def test_batch_per_batch_durations(mock_torchaudio_save):
     with patch(
         "stable_audio_3.cli.StableAudioModel.from_pretrained", return_value=model
     ):
-        _run(["-p", "p1", "p2", "--batch-size", "2", "--duration", "20", "30"])
+        _run(["-p", "p1", "p2", "--duration", "20", "30"])
     kwargs = model.generate.call_args.kwargs
     assert kwargs["duration"] == [20.0, 30.0]
+
+
+def test_batch_duration_count_mismatch_fails():
+    with pytest.raises(SystemExit):
+        _run(["-p", "p1", "p2", "--duration", "20", "30", "40"])
 
 
 def test_batch_per_batch_negative_prompts(mock_torchaudio_save):
@@ -218,9 +237,14 @@ def test_batch_per_batch_negative_prompts(mock_torchaudio_save):
     with patch(
         "stable_audio_3.cli.StableAudioModel.from_pretrained", return_value=model
     ):
-        _run(["-p", "p1", "p2", "--batch-size", "2", "--negative-prompt", "n1", "n2"])
+        _run(["-p", "p1", "p2", "--negative-prompt", "n1", "n2"])
     kwargs = model.generate.call_args.kwargs
     assert kwargs["negative_prompt"] == ["n1", "n2"]
+
+
+def test_batch_negative_prompt_count_mismatch_fails():
+    with pytest.raises(SystemExit):
+        _run(["-p", "p1", "p2", "--negative-prompt", "n1", "n2", "n3"])
 
 
 # ---------------------------------------------------------------------------

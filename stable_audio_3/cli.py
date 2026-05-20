@@ -9,8 +9,6 @@ Basic usage::
 
 import argparse
 import os
-import warnings
-
 import torch
 import torchaudio
 
@@ -29,8 +27,6 @@ def _save_output(audio: torch.Tensor, sample_rate: int, output: str, batch_size:
 
 
 def main():
-    warnings.filterwarnings("ignore")
-
     parser = argparse.ArgumentParser(
         prog="stable-audio",
         description="Stable Audio 3 — CLI for text-to-audio, audio-to-audio, and inpainting",
@@ -90,7 +86,10 @@ def main():
         "--seed", type=int, default=-1, help="Random seed (-1 = random, default: -1)"
     )
     parser.add_argument(
-        "--batch-size", type=int, default=1, help="Batch size (default: 1)"
+        "--batch-size",
+        type=int,
+        default=None,
+        help="Batch size (default: inferred from number of prompts, or 1)",
     )
     parser.add_argument(
         "-o",
@@ -187,6 +186,32 @@ def main():
     if args.inpaint_audio and not args.inpaint_starts:
         parser.error("--inpaint-audio requires --inpaint-start and --inpaint-end")
 
+    # --- Resolve batch size ---
+    n_prompts = len(args.prompt)
+    if args.batch_size is None:
+        batch_size = n_prompts
+    elif n_prompts > 1 and args.batch_size != n_prompts:
+        parser.error(
+            f"--batch-size {args.batch_size} does not match the number of prompts "
+            f"({n_prompts}); omit --batch-size to have it inferred automatically"
+        )
+    else:
+        batch_size = args.batch_size
+
+    # --- Validate list-flag lengths against batch size ---
+    if (
+        args.negative_prompt
+        and len(args.negative_prompt) > 1
+        and len(args.negative_prompt) != batch_size
+    ):
+        parser.error(
+            f"Got {len(args.negative_prompt)} --negative-prompt values but batch size is {batch_size}"
+        )
+    if len(args.duration) > 1 and len(args.duration) != batch_size:
+        parser.error(
+            f"Got {len(args.duration)} --duration values but batch size is {batch_size}"
+        )
+
     # --- Build scalar / list args ---
     prompt = args.prompt[0] if len(args.prompt) == 1 else args.prompt
     negative_prompt = None
@@ -251,7 +276,7 @@ def main():
         steps=args.steps,
         cfg_scale=args.cfg_scale,
         seed=args.seed,
-        batch_size=args.batch_size,
+        batch_size=batch_size,
         init_audio=init_audio,
         init_noise_level=args.init_noise_level,
         inpaint_audio=inpaint_audio,
@@ -260,7 +285,7 @@ def main():
         chunked_decode=chunked_decode,
     )
 
-    _save_output(audio, model.model.sample_rate, args.output, args.batch_size)
+    _save_output(audio, model.model.sample_rate, args.output, batch_size)
 
 
 if __name__ == "__main__":
