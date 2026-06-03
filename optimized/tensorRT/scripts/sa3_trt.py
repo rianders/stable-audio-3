@@ -393,6 +393,7 @@ class SA3Inference:
     DEFAULT_SIGMA_MAX = 1.0  # mega-graph path requires this
 
     def __init__(self, dit: str, decoder: str, *,
+                 precision: str = "fp16mixed",
                  default_T_lat: int = 324, default_steps: int = 8,
                  default_seconds: float = 30.0,
                  models_dir: Path | None = None,
@@ -403,6 +404,9 @@ class SA3Inference:
         Args:
             dit:            one of DIT_CHOICES — "sm-music" / "sm-sfx" / "medium"
             decoder:        one of DECODER_PATHS — "same-s" / "same-l"
+            precision:      "fp16mixed" (default, fastest) or "fp32" (bit-equiv
+                            PyTorch eager, ~2× slower). Engines auto-download
+                            from HF if the requested precision file is missing.
             default_T_lat:  latent length to build the initial graph at
             default_steps:  pingpong steps for the initial graph
             default_seconds: duration condition for the initial graph (used for
@@ -416,6 +420,8 @@ class SA3Inference:
             raise ValueError(f"unknown dit={dit!r}; valid: {list(DIT_CHOICES)}")
         if decoder not in DECODER_PATHS:
             raise ValueError(f"unknown decoder={decoder!r}; valid: {list(DECODER_PATHS)}")
+        if precision not in canon.PRECISIONS:
+            raise ValueError(f"unknown precision={precision!r}; valid: {canon.PRECISIONS}")
 
         # Quiet: patch canon's stage/sub/_stage_vram to no-ops so loading
         # doesn't spam stdout (gradio in particular wants a clean log).
@@ -441,15 +447,12 @@ class SA3Inference:
 
         self.dit_name = dit
         self.decoder_name = decoder
+        self.precision = precision
         self.with_encoder = with_encoder
         self.quiet = quiet
 
-        # 1. Lazy-download any missing engines.
-        needed = list(SHARED_FILES)
-        needed += DIT_ENGINE_FILES[dit]
-        needed += DECODER_FILES[decoder]
-        if with_encoder:
-            needed += ENCODER_FILES[decoder]
+        # 1. Lazy-download any missing engines (precision-aware).
+        needed = canon.get_engine_files(dit, decoder, precision, with_encoder=with_encoder)
         _ensure_files(needed)
 
         # 2. Heavy imports (torch + tensorrt + plugin).
@@ -474,8 +477,8 @@ class SA3Inference:
         import concurrent.futures
         engine_specs = {
             "t5":  canon.T5GEMMA_PATH,
-            "dit": DIT_CHOICES[dit]["engine"],
-            "dec": DECODER_PATHS[decoder],
+            "dit": canon.get_dit_engine_path(dit, precision),
+            "dec": canon.get_decoder_engine_path(decoder, precision),
         }
         if with_encoder:
             engine_specs["enc"] = ENCODER_PATHS[decoder]
@@ -630,6 +633,9 @@ def main():
     ap.add_argument("--inpaint-range", default=None)
     ap.add_argument("--dit", choices=list(DIT_CHOICES.keys()), default=None)
     ap.add_argument("--decoder", choices=list(DECODER_PATHS.keys()), default=None)
+    ap.add_argument("--precision", choices=list(canon.PRECISIONS), default="fp16mixed",
+                    help="Engine precision: 'fp16mixed' (default, fast) or 'fp32' "
+                         "(bit-equiv PyTorch eager, slower). Auto-downloads from HF.")
     ap.add_argument("--models-dir", default=str(canon.MODELS_DIR))
     ap.add_argument("--seconds", type=float, default=30.0)
     ap.add_argument("--steps", type=int, default=8)
@@ -680,8 +686,6 @@ def main():
 
     # T_lat
     T_lat = max(1, math.ceil(args.seconds * SAMPLE_RATE / SAMPLES_PER_LATENT))
-    if args.decoder == "same-s" and T_lat % 2 != 0:
-        T_lat += 1
     target_dur = T_lat * SAMPLES_PER_LATENT / SAMPLE_RATE
 
     DIT_MIN_L, DIT_MAX_L = 1, 4096
@@ -723,7 +727,7 @@ def main():
     if args.negative_prompt:
         suffix = "" if args.cfg != 1.0 else dim("  (ignored: --cfg=1.0)")
         print(f"  {k('neg prompt')}  {bold(repr(args.negative_prompt))}{suffix}")
-    print(f"  {k('dit')}  {magenta(v(args.dit))}   {k('decoder')}  {magenta(v(args.decoder))}")
+    print(f"  {k('dit')}  {magenta(v(args.dit))}   {k('decoder')}  {magenta(v(args.decoder))}   {k('precision')}  {v(args.precision)}")
     print(f"  {k('σmax')}  {bold(f'{sigma_max:.2f}')}")
     print(f"  {k('seconds')}  {v(f'{args.seconds}s')}   {k('steps')}  {v(args.steps)}   {k('seed')}  {args.seed}")
     print(f"  {k('cfg')}  {v(args.cfg)}   {k('mega-graph')}  {v('on' if use_mega else 'off (fallback)')}")
@@ -731,11 +735,8 @@ def main():
     print()
 
     # Lazy-download
-    needed = list(SHARED_FILES)
-    needed += DIT_ENGINE_FILES[args.dit]
-    needed += DECODER_FILES[args.decoder]
-    if args.init_audio:
-        needed += ENCODER_FILES[args.decoder]
+    needed = canon.get_engine_files(args.dit, args.decoder, args.precision,
+                                      with_encoder=bool(args.init_audio))
     _ensure_files(needed)
 
     # Heavy imports
@@ -760,8 +761,8 @@ def main():
     import concurrent.futures
     engine_specs = {
         "t5":  canon.T5GEMMA_PATH,
-        "dit": DIT_CHOICES[args.dit]["engine"],
-        "dec": DECODER_PATHS[args.decoder],
+        "dit": canon.get_dit_engine_path(args.dit, args.precision),
+        "dec": canon.get_decoder_engine_path(args.decoder, args.precision),
     }
     if args.init_audio:
         engine_specs["enc"] = ENCODER_PATHS[args.decoder]

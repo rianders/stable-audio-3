@@ -141,6 +141,61 @@ ENCODER_PATHS = {
     "same-l": ARCH_DIR / "same-l" / "enc_dynamic_triton_swa.trt",
 }
 
+
+# ─── Precision-keyed engine maps ─────────────────────────────────────────
+#
+# The canonical engines are FP16-mixed (FP16 trunk + FP32 islands around
+# RMSNorm / Softmax / RoPE). Pure-FP32 variants are also published — same
+# numerical behavior as PyTorch eager FP32. Use `--precision fp32` on the
+# CLI to pick them; default is `fp16mixed`.
+#
+# The lookup tables below resolve the engine filename per (dit/decoder,
+# precision). Encoders are FP16-mixed only.
+DIT_ENGINE_FILENAME = {
+    "fp16mixed": "dit_fp16mixed.trt",
+    "fp32":      "dit_fp32.trt",
+}
+_DIT_SUBDIR = {"sm-music": "sa3-sm-music", "sm-sfx": "sa3-sm-sfx", "medium": "sa3-m"}
+DECODER_ENGINE_FILENAME = {
+    "same-l": {
+        "fp16mixed": "dec_dynamic_triton_swa.trt",
+        "fp32":      "dec_dynamic_fp32.trt",
+    },
+    "same-s": {
+        "fp16mixed": "dec_dynamic_bf16.trt",
+        "fp32":      "dec_dynamic_fp32.trt",
+    },
+}
+PRECISIONS = ("fp16mixed", "fp32")
+
+
+def get_dit_engine_path(dit_name: str, precision: str = "fp16mixed") -> Path:
+    if dit_name not in _DIT_SUBDIR:
+        raise ValueError(f"unknown dit={dit_name!r}; valid: {list(_DIT_SUBDIR)}")
+    if precision not in DIT_ENGINE_FILENAME:
+        raise ValueError(f"unknown precision={precision!r}; valid: {PRECISIONS}")
+    return ARCH_DIR / _DIT_SUBDIR[dit_name] / DIT_ENGINE_FILENAME[precision]
+
+
+def get_decoder_engine_path(decoder_name: str, precision: str = "fp16mixed") -> Path:
+    if decoder_name not in DECODER_ENGINE_FILENAME:
+        raise ValueError(f"unknown decoder={decoder_name!r}; valid: {list(DECODER_ENGINE_FILENAME)}")
+    if precision not in DECODER_ENGINE_FILENAME[decoder_name]:
+        raise ValueError(f"unknown precision={precision!r}; valid: {PRECISIONS}")
+    return ARCH_DIR / decoder_name / DECODER_ENGINE_FILENAME[decoder_name][precision]
+
+
+def get_engine_files(dit_name: str, decoder_name: str, precision: str = "fp16mixed",
+                       with_encoder: bool = False) -> list[str]:
+    """Relative paths (under ARCH_DIR) needed for the chosen pipeline. Pass this
+    list to _ensure_files() to auto-download anything missing from HF."""
+    files = list(SHARED_FILES)
+    files.append(f"{_DIT_SUBDIR[dit_name]}/{DIT_ENGINE_FILENAME[precision]}")
+    files.append(f"{decoder_name}/{DECODER_ENGINE_FILENAME[decoder_name][precision]}")
+    if with_encoder:
+        files.append(f"{decoder_name}/" + ENCODER_PATHS[decoder_name].name)
+    return files
+
 # ─── Display helpers (ANSI color when stdout is a TTY) ───────────────────
 _USE_COLOR = sys.stdout.isatty()
 _RULE_W = 64
@@ -824,12 +879,16 @@ def main():
     ap.add_argument("--decoder", choices=list(DECODER_PATHS.keys()), default=None,
                     help="Audio decoder. 'same-s' pairs with sm-* (110 MB engine). "
                          "'same-l' pairs with medium (1.2 GB engine). Interactive picker if omitted.")
+    ap.add_argument("--precision", choices=list(PRECISIONS), default="fp16mixed",
+                    help="Engine precision. 'fp16mixed' (default) = FP16 trunk + FP32 islands, "
+                         "fastest. 'fp32' = pure FP32, matches PyTorch eager bit-for-bit but ~2× "
+                         "slower and ~2× the VRAM. Engines auto-download from HF if missing.")
     ap.add_argument("--models-dir", default=str(MODELS_DIR),
                     help=f"Directory containing the TRT engines. Default: {MODELS_DIR}")
     # ── Sampling ──
     ap.add_argument("--seconds", type=float, default=30.0,
-                    help="Output length. T_lat = ceil(seconds * 44100 / 4096), bumped to even when "
-                         "--decoder=same-s (chunk alignment). Final WAV trimmed to exact --seconds.")
+                    help="Output length. T_lat = ceil(seconds * 44100 / 4096). "
+                         "Final WAV trimmed to exact --seconds.")
     ap.add_argument("--steps", type=int, default=8,
                     help="Pingpong sampling steps. 1 = single forward (fastest). 8 = the distilled "
                          "sweet spot for rf_denoiser. >8 is diminishing returns.")
@@ -975,11 +1034,8 @@ def main():
     print()
 
     # ── Lazy-download any missing engine files for the chosen (dit, decoder) combo ──
-    needed = list(SHARED_FILES)
-    needed += DIT_ENGINE_FILES[args.dit]
-    needed += DECODER_FILES[args.decoder]
-    if args.init_audio:
-        needed += ENCODER_FILES[args.decoder]
+    needed = get_engine_files(args.dit, args.decoder, args.precision,
+                                with_encoder=bool(args.init_audio))
     _ensure_files(needed)
 
     # ── Heavy imports (torch + tensorrt + plugin) ──
@@ -1006,8 +1062,8 @@ def main():
     import concurrent.futures
     engine_specs = {
         "t5":  T5GEMMA_PATH,
-        "dit": DIT_CHOICES[args.dit]["engine"],
-        "dec": DECODER_PATHS[args.decoder],
+        "dit": get_dit_engine_path(args.dit, args.precision),
+        "dec": get_decoder_engine_path(args.decoder, args.precision),
     }
     if args.init_audio:
         engine_specs["enc"] = ENCODER_PATHS[args.decoder]
