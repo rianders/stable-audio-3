@@ -377,7 +377,17 @@ def t5gemma_encode(runner: TRTRunner, tokenizer, prompt: str):
 
 
 def encoder_encode(runner: TRTRunner, audio: torch.Tensor) -> torch.Tensor:
-    """SAME-S/L encoder. audio: (1, 2, T_samples). Returns latents (1, 256, L)."""
+    """SAME-S/L encoder, single-shot. audio: (1, 2, T_samples). Returns (1, 256, L).
+
+    WARNING: the canonical SAME-L (Triton SWA) and SAME-S (BF16) encoder engines
+    diverge from PyTorch eager at long sequence lengths — SAME-L produces NaN
+    past ~T_lat=200 on real music, SAME-S settles at cos ≈ 0.4 vs PT past
+    T_lat=108. Engine output is also sensitive to prior shape/state.
+
+    Use `encode_chunked()` instead for any audio with T_lat > ~100. It splits
+    the input into safe-length chunks (cos ≥ 0.998 vs PT eager up to 37 s
+    tested) and stitches the latents.
+    """
     ctx = runner.context
     in_dt = runner.in_dtype["audio"]
     out_dt = runner.out_dtype["latent"]
@@ -389,6 +399,75 @@ def encoder_encode(runner: TRTRunner, audio: torch.Tensor) -> torch.Tensor:
     ctx.set_tensor_address("latent", out.data_ptr())
     ctx.execute_async_v3(runner.stream.cuda_stream); runner.stream.synchronize()
     return out.float()
+
+
+# SAME-L and SAME-S encoder engines lose accuracy / produce NaN past short
+# audio lengths. PT eager is essentially "local" (cos(PT_full[:N], PT(short_N))
+# > 0.999), so we can stitch chunked outputs and match PT to cos > 0.998.
+DEFAULT_ENCODER_CHUNK_LAT = 50    # safe length: cos ≥ 0.998 vs PT for both arches
+DEFAULT_ENCODER_OVERLAP_LAT = 8   # 4 latents trimmed from each interior edge
+
+
+def encode_chunked(runner: TRTRunner, audio: torch.Tensor, *,
+                    chunk_lat: int = DEFAULT_ENCODER_CHUNK_LAT,
+                    overlap_lat: int = DEFAULT_ENCODER_OVERLAP_LAT,
+                    warmup_passes: int = 2) -> torch.Tensor:
+    """Chunked SAME-S/L encode. Equivalent to encoder_encode for short audio,
+    but reliably accurate at any length.
+
+    Splits `audio` into `chunk_lat`-latent windows that overlap by `overlap_lat`,
+    encodes each (all at the same shape — no in-loop shape transitions, which
+    the encoders' BF16/FP16-mixed trunks don't always handle cleanly), and
+    stitches the resulting latents by keeping the interior of each chunk.
+
+    Args:
+      audio:        (1, 2, T_samples), T_samples must be a multiple of 4096.
+      chunk_lat:    latents per chunk; default 50 (≈ 1.86 s) — verified to
+                    match PT eager at cos ≥ 0.998 for both encoders.
+      overlap_lat:  overlap between adjacent chunks; default 8 (4 latents
+                    trimmed from each interior edge).
+      warmup_passes: zero-audio calls at chunk_lat before the real chunks,
+                    to stabilise engine state. Default 2.
+
+    Returns: (1, 256, T_lat) where T_lat = T_samples // 4096.
+    """
+    SAMPLES_PER_LATENT_ = 4096
+    if audio.shape[-1] % SAMPLES_PER_LATENT_ != 0:
+        raise ValueError(f"audio length {audio.shape[-1]} not divisible by {SAMPLES_PER_LATENT_}")
+    T_lat = audio.shape[-1] // SAMPLES_PER_LATENT_
+    if T_lat <= chunk_lat:
+        # Single shot — still warm the engine at this exact shape first
+        warm = torch.zeros_like(audio)
+        for _ in range(warmup_passes):
+            _ = encoder_encode(runner, warm)
+        return encoder_encode(runner, audio)
+
+    # Pre-warm at chunk_lat (zero audio, same shape as real chunks)
+    warm = torch.zeros(1, 2, chunk_lat * SAMPLES_PER_LATENT_,
+                        device=audio.device, dtype=torch.float32)
+    for _ in range(warmup_passes):
+        _ = encoder_encode(runner, warm)
+
+    # Chunk start positions; last chunk anchored to the end
+    step = chunk_lat - overlap_lat
+    starts = list(range(0, T_lat - chunk_lat, step))
+    if not starts or starts[-1] != T_lat - chunk_lat:
+        starts.append(T_lat - chunk_lat)
+
+    # Run all chunks (all same shape ⇒ stable engine state)
+    chunks = []
+    for s in starts:
+        chunk_audio = audio[..., s * SAMPLES_PER_LATENT_ : (s + chunk_lat) * SAMPLES_PER_LATENT_].contiguous()
+        chunks.append((s, encoder_encode(runner, chunk_audio)))
+
+    # Stitch: take the interior of each chunk (first/last include their outer edge)
+    out = torch.zeros(1, 256, T_lat, device=audio.device, dtype=torch.float32)
+    half = overlap_lat // 2
+    for i, (s, z) in enumerate(chunks):
+        kl = 0 if i == 0 else half
+        kr = chunk_lat if i == len(chunks) - 1 else chunk_lat - (overlap_lat - half)
+        out[..., s + kl : s + kr] = z[..., kl:kr]
+    return out
 
 
 def decoder_decode(runner: TRTRunner, latents: torch.Tensor) -> torch.Tensor:
