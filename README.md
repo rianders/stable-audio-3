@@ -252,7 +252,7 @@ MLX and TensorRT available (experimental), check out the scripts and docs in [op
 | [Prompting Guide](docs/guides/prompting.md) | Prompt and control signal reference |
 | [Model Overview](docs/guides/model-overview.md) | Architecture and design overview |
 | [MLX inference](optimized/mlx/README.md) | Optimized MLX inference for M-series Mac |
-| [tensorRT inference](optimized/tensorRT/README.md) | Optimized tensorRT inference for Nvidia GPUs |
+| [TensorRT inference](optimized/tensorRT/README.md) | Optimized TensorRT inference for Nvidia GPUs |
 
 ---
 
