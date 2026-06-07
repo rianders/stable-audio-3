@@ -239,7 +239,7 @@ Run `stable-audio --help` for the full list of flags.
 ## Hardware Support
 Stable Audio 3 scales from a laptop to a GPU server.
 
-MLX and TensorRT available (experimental), check out the scripts and docs in [optimized/mlx](optimized/mlx) and [optimized/tensorRT](optimized/tensorRT)
+MLX and TensorRT available (experimental), check out the scripts and docs in [optimized/mlx](optimized/mlx) and [optimized/tensorRT](optimized/tensorRT).
 
 
 ## Docs
@@ -251,6 +251,8 @@ MLX and TensorRT available (experimental), check out the scripts and docs in [op
 | [Autoencoder Workflows](docs/workflows/autoencoder.md) | Encode and decode audio with the VAE directly |
 | [Prompting Guide](docs/guides/prompting.md) | Prompt and control signal reference |
 | [Model Overview](docs/guides/model-overview.md) | Architecture and design overview |
+| [MLX inference](optimized/mlx/README.md) | Optimized MLX inference for M-series Mac |
+| [tensorRT inference](optimized/tensorRT/README.md) | Optimized tensorRT inference for Nvidia GPUs |
 
 ---
 
