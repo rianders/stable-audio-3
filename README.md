@@ -239,7 +239,7 @@ Run `stable-audio --help` for the full list of flags.
 ## Hardware Support
 Stable Audio 3 scales from a laptop to a GPU server.
 
-*Hardware Support Scripts COMING SOON*
+MLX and TensorRT available (experimental), check out the scripts and docs in [optimized/mlx](optimized/mlx) and [optimized/tensorRT](optimized/tensorRT)
 
 
 ## Docs
