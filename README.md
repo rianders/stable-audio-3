@@ -262,6 +262,8 @@ MLX and TensorRT available (experimental), check out the scripts and docs in [op
 
 - [Underfit](https://github.com/dada-bots/underfit): A LoRA training poweruser dream from Dadabots. If LoRA training in this repo is not enough, check out some experimental tools there like agentic LoRA orchestrations and monitoring.
 
+- [Awesome Stable Audio](https://github.com/Stability-AI/Awesome-Stable-Audio): Curated list of all community-built Stable Audio projects. Includes links to ComfyUI, Fal, as well as a growing list of community integrations and extensions. 
+
 ---
 
 ## Troubleshooting
