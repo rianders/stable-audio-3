@@ -61,8 +61,8 @@ BUNDLE_SIZES = {
 # Quantized DiT + decoder variants (selected via sa3_tflite.py --precision; wXaY =
 # weight/activation bit-widths, "16" = fp16). Not part of the install bundles — they
 # lazy-download on first use. w16a32 = fp16 weights (half size, ≈lossless, slower on
-# CPU); w8a32 / w8a8-dyn / w4a32 = GPTQ-calibrated int8/int4 weights.
-QUANT_PRECISIONS = ("w16a32", "w8a32", "w8a8-dyn", "w4a32")
+# CPU); w8a32 / w8a8-dyn = GPTQ-calibrated int8 weights.
+QUANT_PRECISIONS = ("w16a32", "w8a32", "w8a8-dyn")
 _QUANT_DIRS = ("sa3-sm-music", "sa3-sm-sfx", "sa3-m", "same-s", "same-l")
 
 # Flat (local_rel_path → hf_path) lookup — used by sa3_tflite.py for lazy

@@ -58,7 +58,6 @@ lazy-download from HuggingFace on first use.
 | `w16a32` | fp16mixed | 0.9 / 2.9 / 0.1–0.9 GB | ≈lossless (fp16 weights, fp32 activations; 62–75 dB per-forward) | ~1.3× slower (XNNPACK dequantizes per-matmul) |
 | `w8a32` | woint8 | 0.45 / 1.5 / 0.05–0.5 GB | GPTQ int8 weights — codecs transparent (40–46 dB); DiT gives a *different but plausible* sample | ≈fp32 |
 | `w8a8-dyn` | dynint8 | 0.45 / 1.5 / 0.05–0.5 GB | lowest (int8 weights + activations, per-invoke dynamic scales) | fastest (~1.3×) |
-| `w4a32` | woint4 | 0.23 / 0.7 / 0.03–0.3 GB | experimental — DiT collapses, codecs below the 30 dB floor; **not published on HF** (local builds only) | ≈fp32 |
 
 *(Names follow the wXaY convention — weight/activation bit-widths, as in LLM releases:
 quantization here touches the FULLY_CONNECTED weights; activations stay fp32 except
@@ -67,7 +66,7 @@ All bit-widths are per-channel weight grids; "16" is fp16 — there is no int16 
 
 Two things worth knowing, both counter-intuitive:
 
-- **Quantization buys *size*, not speed, on CPU.** Weight-only int8/int4 dequantize
+- **Quantization buys *size*, not speed, on CPU.** Weight-only int8 dequantizes
   to fp32 before each matmul, so they run at fp32 speed; fp16 is *slower* than fp32.
   Only `dynint8` (quantized activations → true int8 matmuls) is faster.
 - **DiT quantization error compounds.** The 8-step sampler is chaotically sensitive:
@@ -76,7 +75,7 @@ Two things worth knowing, both counter-intuitive:
   by PSNR (they run once on a fixed latent).
 
 One CFG note: batched and sequential CFG are bit-identical for `fp32`/`w8a32` and
-inaudibly different (~80 dB) for `w16a32`/`w4a32`, but under `w8a8-dyn` the batch=2
+inaudibly different (~80 dB) for `w16a32`, but under `w8a8-dyn` the batch=2
 invoke shares activation-quantization scales across the cond/uncond rows, so batched
 CFG yields a *different plausible sample* than sequential. Pass `--no-cfg-batched`
 with `w8a8-dyn` when you need run-to-run reproducibility against sequential baselines.
@@ -87,6 +86,16 @@ with `w8a8-dyn` when you need run-to-run reproducibility against sequential base
 
 # fastest CPU inference (quality tradeoff)
 ./sa3 --prompt "lofi house loop" --dit sm-music --decoder same-s --precision w8a8-dyn
+```
+
+`--dit-precision` / `--decoder-precision` override the shared flag per component —
+useful because the two react to quantization very differently (the codec's precision
+maps directly to audio fidelity; the DiT's changes *which* sample you get):
+
+```bash
+# fastest DiT, reference-quality codec
+./sa3 --prompt "lofi house loop" --dit sm-music --decoder same-s \
+      --precision fp32 --dit-precision w8a8-dyn
 ```
 
 ## Install

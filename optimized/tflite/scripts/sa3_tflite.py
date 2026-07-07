@@ -54,8 +54,7 @@ MIN_SIGMA = 0.01   # rf_denoiser is undefined at t≈0 → NaN below this
 #             (legacy name: fp16mixed; ≈ TRT's fp16mixed in spirit, storage-only here)
 #   w8a32     GPTQ weight-only int8 — ¼ size at fp32 speed (legacy: woint8)
 #   w8a8-dyn  GPTQ dynamic int8 — fastest (~1.3×), lowest quality (legacy: dynint8)
-#   w4a32     GPTQ weight-only int4 — ⅛ size, experimental (legacy: woint4)
-PRECISIONS = ("fp32", "w16a32", "w8a32", "w8a8-dyn", "w4a32")
+PRECISIONS = ("fp32", "w16a32", "w8a32", "w8a8-dyn")
 _DIT_SUBDIR = {"sm-music": "sa3-sm-music", "sm-sfx": "sa3-sm-sfx", "medium": "sa3-m"}
 
 
@@ -181,7 +180,7 @@ def _preflight_download(args, dec) -> None:
     BEFORE the banner prints and BEFORE the wall-clock starts. Network time then
     isn't charged against '×realtime' and the user sees download progress as a
     clearly separate setup step."""
-    needed = [T5_REL, dit_rel(args.dit, args.precision), dec_rel(dec, args.precision)]
+    needed = [T5_REL, dit_rel(args.dit, args.dit_precision), dec_rel(dec, args.decoder_precision)]
     if args.init_audio:
         needed.append(ENC_REL[dec])
     missing = [p for p in needed if not is_present(p)]
@@ -490,9 +489,15 @@ def main():
                          "as the TensorRT CLI): 'fp32' (default — reference; on CPU also the "
                          "fast choice) | 'w16a32' (fp16 weights, half size, ≈lossless, ~1.3× "
                          "slower) | 'w8a32' (GPTQ int8 weights, ¼ size at fp32 speed) | "
-                         "'w8a8-dyn' (dynamic int8, fastest, lower quality) | "
-                         "'w4a32' (GPTQ int4 weights, ⅛ size, experimental quality). "
+                         "'w8a8-dyn' (dynamic int8, fastest, lower quality). "
                          "Encoders + T5Gemma are single-precision, as in TRT.")
+    ap.add_argument("--dit-precision", choices=list(PRECISIONS), default=None,
+                    help="Override --precision for the DiT only (e.g. a quantized DiT "
+                         "with an fp32 codec).")
+    ap.add_argument("--decoder-precision", choices=list(PRECISIONS), default=None,
+                    help="Override --precision for the SAME codec only. The codec runs "
+                         "once on a fixed latent, so its precision maps directly to "
+                         "audio quality (w8a32 is transparent at 40-46 dB).")
     # Sampling
     ap.add_argument("--seconds", type=float, default=30.0,
                     help="Output length. T_lat = ceil(seconds*44100/4096) (natural ceil, decoder-"
@@ -526,6 +531,9 @@ def main():
     args = ap.parse_args()
     if args.steps < 1:
         ap.error(f"--steps must be ≥ 1 (got {args.steps})")
+    # per-component overrides fall back to the shared --precision
+    args.dit_precision = args.dit_precision or args.precision
+    args.decoder_precision = args.decoder_precision or args.precision
 
     # Interactive fills (match MLX/TRT).
     args = prompt_user_if_missing(args)
@@ -589,7 +597,9 @@ def main():
     line = f"  {k('dit')}  {magenta(args.dit)}   {k('decoder')}  {magenta(dec)}"
     if args.init_audio:
         line += f"   {k('encoder')}  {magenta(dec)}"
-    line += f"   {k('precision')}  {magenta(args.precision)}   {k('threads')}  {args.threads}"
+    prec_disp = (args.dit_precision if args.dit_precision == args.decoder_precision
+                 else f"dit {args.dit_precision} · codec {args.decoder_precision}")
+    line += f"   {k('precision')}  {magenta(prec_disp)}   {k('threads')}  {args.threads}"
     print(line)
     if args.init_audio:
         print(f"  {k('init audio')}  {bold(args.init_audio)}")
@@ -686,7 +696,7 @@ def main():
     cfg_note = (("CFG batched (1× batch=2 invoke/step)" if args.cfg_batched
                  else "CFG sequential (2× batch=1 invokes/step)") if args.cfg != 1.0 else "")
     print(f"        {dim('loading baked DiT ' + args.dit + ' ...')}", flush=True)
-    backend = BakedDiT(ensure_local(dit_rel(args.dit, args.precision)), T_lat, t5_hidden, mask.astype(np.float32),
+    backend = BakedDiT(ensure_local(dit_rel(args.dit, args.dit_precision)), T_lat, t5_hidden, mask.astype(np.float32),
                        args.seconds, args.threads, cfg=args.cfg, apg=args.apg,
                        null_hidden=null_h, null_mask=null_m, local_add_cond=local_add_cond,
                        batched=args.cfg_batched)
@@ -726,7 +736,7 @@ def main():
     stage(TAG["dec"], f"Decoder ({dec}, audio-out) + WAV")
     t0 = time.perf_counter()
     print(f"        {dim('loading baked decoder ' + dec + ' ...')}", flush=True)
-    decoder = BakedDecoder(ensure_local(dec_rel(dec, args.precision)), args.threads, needs_even=(dec == "same-s"))
+    decoder = BakedDecoder(ensure_local(dec_rel(dec, args.decoder_precision)), args.threads, needs_even=(dec == "same-s"))
     load2_ms = (time.perf_counter() - t0) * 1000
     sub(f"load {load2_ms:.0f} ms")
 
