@@ -58,6 +58,13 @@ BUNDLE_SIZES = {
 }
 # T5Gemma (shared, fp16) adds ~0.6 GB the first time any bundle is fetched.
 
+# Quantized DiT + decoder variants (selected via sa3_tflite.py --precision; wXaY =
+# weight/activation bit-widths, "16" = fp16). Not part of the install bundles — they
+# lazy-download on first use. w16a32 = fp16 weights (half size, ≈lossless, slower on
+# CPU); w8a32 / w8a8-dyn / w4a32 = GPTQ-calibrated int8/int4 weights.
+QUANT_PRECISIONS = ("w16a32", "w8a32", "w8a8-dyn", "w4a32")
+_QUANT_DIRS = ("sa3-sm-music", "sa3-sm-sfx", "sa3-m", "same-s", "same-l")
+
 # Flat (local_rel_path → hf_path) lookup — used by sa3_tflite.py for lazy
 # auto-download at load time.
 FLAT_MANIFEST: dict[str, str] = {}
@@ -66,6 +73,11 @@ for _items in DIT_BUNDLES.values():
         FLAT_MANIFEST[_rel] = _hf
 for _rel, _hf in SHARED:
     FLAT_MANIFEST[_rel] = _hf
+for _sub in _QUANT_DIRS:
+    _kind = "dec" if _sub.startswith("same-") else "dit"
+    for _prec in QUANT_PRECISIONS:
+        _rel = f"models/tflite/{_sub}/{_kind}_{_prec}.tflite"
+        FLAT_MANIFEST[_rel] = f"tflite/{_sub}/{_kind}_{_prec}.tflite"
 
 
 def _hf_token_configured() -> bool:

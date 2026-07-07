@@ -43,6 +43,52 @@ prompt ─▶ T5Gemma encoder ─▶ DiT pingpong sampler ─▶ SAME-S/L decode
                   optional: encoder + init audio (audio-to-audio / inpaint)
 ```
 
+## Precision variants (`--precision`)
+
+Same flag as the TensorRT CLI's `--precision`; the values use the wXaY naming
+(weights/activations bit-widths). One flag switches the DiT **and**
+decoder together; the encoder + T5Gemma stay single-precision (as in TRT). All
+variants keep the full feature set: variable length (any `--seconds`, odd or even
+latent counts) and variable batch (batched or sequential CFG). Missing files
+lazy-download from HuggingFace on first use.
+
+| `--precision` | legacy name | size (sm DiT / medium DiT / codecs) | quality | CPU speed |
+|---------------|-------------|-------------------------------------|---------|-----------|
+| `fp32` (default) | — | 1.8 GB / 5.8 GB / 0.2–1.8 GB | reference | 1× — on CPU this is *also* the fast choice |
+| `w16a32` | fp16mixed | 0.9 / 2.9 / 0.1–0.9 GB | ≈lossless (fp16 weights, fp32 activations; 62–75 dB per-forward) | ~1.3× slower (XNNPACK dequantizes per-matmul) |
+| `w8a32` | woint8 | 0.45 / 1.5 / 0.05–0.5 GB | GPTQ int8 weights — codecs transparent (40–46 dB); DiT gives a *different but plausible* sample | ≈fp32 |
+| `w8a8-dyn` | dynint8 | 0.45 / 1.5 / 0.05–0.5 GB | lowest (int8 weights + activations, per-invoke dynamic scales) | fastest (~1.3×) |
+| `w4a32` | woint4 | 0.23 / 0.7 / 0.03–0.3 GB | experimental — DiT collapses, codecs below the 30 dB floor; **not published on HF** (local builds only) | ≈fp32 |
+
+*(Names follow the wXaY convention — weight/activation bit-widths, as in LLM releases:
+quantization here touches the FULLY_CONNECTED weights; activations stay fp32 except
+`w8a8-dyn`, whose int8×int8 matmuls are what make it the only faster-than-fp32 variant.
+All bit-widths are per-channel weight grids; "16" is fp16 — there is no int16 variant.)*
+
+Two things worth knowing, both counter-intuitive:
+
+- **Quantization buys *size*, not speed, on CPU.** Weight-only int8/int4 dequantize
+  to fp32 before each matmul, so they run at fp32 speed; fp16 is *slower* than fp32.
+  Only `dynint8` (quantized activations → true int8 matmuls) is faster.
+- **DiT quantization error compounds.** The 8-step sampler is chaotically sensitive:
+  per-step weight error turns into a *different* (still plausible) sample rather than
+  a noisy version of the fp32 one. Judge DiT precisions by ear; decoder precisions
+  by PSNR (they run once on a fixed latent).
+
+One CFG note: batched and sequential CFG are bit-identical for `fp32`/`w8a32` and
+inaudibly different (~80 dB) for `w16a32`/`w4a32`, but under `w8a8-dyn` the batch=2
+invoke shares activation-quantization scales across the cond/uncond rows, so batched
+CFG yields a *different plausible sample* than sequential. Pass `--no-cfg-batched`
+with `w8a8-dyn` when you need run-to-run reproducibility against sequential baselines.
+
+```bash
+# quarter-size models, same speed and near-identical quality on the decoder side
+./sa3 --prompt "lofi house loop" --dit sm-music --decoder same-s --precision w8a32
+
+# fastest CPU inference (quality tradeoff)
+./sa3 --prompt "lofi house loop" --dit sm-music --decoder same-s --precision w8a8-dyn
+```
+
 ## Install
 
 ```bash
