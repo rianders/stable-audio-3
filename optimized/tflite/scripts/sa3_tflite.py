@@ -21,7 +21,8 @@ prompt's T5 output (or an all-zero hidden+mask, which the in-graph conditioner t
 learned padding embeddings) — it does NOT zero cross_attn like MLX (our DiT bakes the
 conditioner, so there's no raw cross_attn). CFG runs cond+uncond as ONE batch=2 invoke on the
 variable-batch DiT (--cfg-batched, default; ~7-29%% faster on Apple-Silicon AMX) or as a
-sequential batch=1 dual-pass (--no-cfg-batched). Both are bit-identical.
+sequential batch=1 dual-pass (--no-cfg-batched). Bit-identical at fp32/w8a32; ~80 dB at
+w16a32; w8a8-dyn diverges by design (activation scales shared across the batch).
 
 All model files auto-download from HuggingFace (stabilityai/stable-audio-3-optimized)
 on first use and symlink into models/tflite/ from the HF cache. See scripts/weights.py.
@@ -36,7 +37,7 @@ sys.path.insert(0, str(REPO))                    # so `from models.defs.* import
 sys.path.insert(0, str(REPO / "scripts"))        # so `from weights import *` resolves
 
 from models.defs import tflite_pipeline as P    # Tokenizer, T5GemmaTFLite, build_pingpong_schedule, make_noise, sample, save_wav
-from weights import ensure_local, is_present
+from weights import ensure_local, is_present, PRECISIONS, dit_rel, dec_rel
 
 SAMPLE_RATE = 44100
 SAMPLES_PER_LATENT = 4096
@@ -50,27 +51,15 @@ MIN_SIGMA = 0.01   # rf_denoiser is undefined at t≈0 → NaN below this
 # "16" = fp16, there is no int16). Encoders + T5Gemma have one precision, like TRT.
 #   fp32      reference models (default — on CPU fp16 is SLOWER than fp32, so unlike
 #             TRT the fastest-and-accurate choice is fp32)
-#   w16a32    fp16 weights / fp32 activations — half size, ≈lossless, ~1.3× slower
-#             (legacy name: fp16mixed; ≈ TRT's fp16mixed in spirit, storage-only here)
+#   w16a32    fp16 weights / fp32 activations — half size, ≈lossless, 1.5-3× slower
+#             on an M4 Pro (legacy name: fp16mixed; ≈ TRT's fp16mixed in spirit,
+#             storage-only here)
 #   w8a32     GPTQ weight-only int8 — ¼ size at fp32 speed (legacy: woint8)
-#   w8a8-dyn  GPTQ dynamic int8 — fastest (~1.3×), lowest quality (legacy: dynint8)
-PRECISIONS = ("fp32", "w16a32", "w8a32", "w8a8-dyn")
-_DIT_SUBDIR = {"sm-music": "sa3-sm-music", "sm-sfx": "sa3-sm-sfx", "medium": "sa3-m"}
-
-
-def dit_rel(dit: str, precision: str = "fp32") -> str:
-    return f"models/tflite/{_DIT_SUBDIR[dit]}/dit_{precision}.tflite"
-
-
-def dec_rel(dec: str, precision: str = "fp32") -> str:
-    return f"models/tflite/{dec}/dec_{precision}.tflite"
-
-
-DIT_REL = {d: dit_rel(d) for d in _DIT_SUBDIR}          # fp32 defaults (back-compat)
-DEC_REL = {
-    "same-s": "models/tflite/same-s/dec_fp32.tflite",
-    "same-l": "models/tflite/same-l/dec_fp32.tflite",
-}
+#   w8a8-dyn  GPTQ dynamic int8 — fastest (~1.2-1.3×), lowest quality (legacy: dynint8)
+# PRECISIONS + the path builders live in weights.py (single source of truth with
+# the download manifest — a precision the CLI accepts is guaranteed downloadable).
+DIT_REL = {d: dit_rel(d) for d in ("sm-music", "sm-sfx", "medium")}   # fp32 (picker)
+DEC_REL = {d: dec_rel(d) for d in ("same-s", "same-l")}
 ENC_REL = {
     "same-s": "models/tflite/same-s/enc_fp32.tflite",
     "same-l": "models/tflite/same-l/enc_fp32.tflite",
@@ -245,8 +234,9 @@ class BakedDiT:
 
     cfg==1.0  -> one batch=1 forward with the (cond) T5 output.
     cfg!=1.0  -> CFG combining a cond and an uncond (null_hidden/null_mask) velocity in
-                 denoised space with optional APG. Two interchangeable backends (bit-identical
-                 output; auto-falls-back to batch=1 for cfg==1.0):
+                 denoised space with optional APG. Two backends (bit-identical output at
+                 fp32/w8a32; ~80 dB at w16a32; w8a8-dyn diverges — batch-shared activation
+                 scales; auto-falls-back to batch=1 for cfg==1.0):
       batched=True  (default): ONE batch=2 invoke/step — cond=row0, uncond=row1 — on the
                     canonical variable-batch DiT (its batch axis is dynamic). ~7-29%% faster
                     on Apple-Silicon (the AMX matrix unit amortizes weight loads across the 2 rows).
@@ -457,6 +447,7 @@ class _HelpfulParser(argparse.ArgumentParser):
 def main():
     ap = _HelpfulParser(
         description="SA3 text-to-audio (+ audio-to-audio + inpainting + CFG) — baked-I/O varlen TFLite / CPU",
+        allow_abbrev=False,   # --pr/--di/--de became ambiguous once *-precision flags landed
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=("modes\n"
                 "  text-to-audio    --prompt P\n"
@@ -487,7 +478,7 @@ def main():
     ap.add_argument("--precision", choices=list(PRECISIONS), default="fp32",
                     help="DiT + decoder precision, wXaY = weight/activation bits (same flag "
                          "as the TensorRT CLI): 'fp32' (default — reference; on CPU also the "
-                         "fast choice) | 'w16a32' (fp16 weights, half size, ≈lossless, ~1.3× "
+                         "fast choice) | 'w16a32' (fp16 weights, half size, ≈lossless, 1.5-3× "
                          "slower) | 'w8a32' (GPTQ int8 weights, ¼ size at fp32 speed) | "
                          "'w8a8-dyn' (dynamic int8, fastest, lower quality). "
                          "Encoders + T5Gemma are single-precision, as in TRT.")
@@ -518,7 +509,10 @@ def main():
     ap.add_argument("--cfg-batched", action=argparse.BooleanOptionalAction, default=True,
                     help="When --cfg≠1.0, run cond+uncond as ONE batch=2 invoke on the variable-batch "
                          "DiT (default; ~7-29%% faster on Apple-Silicon AMX). --no-cfg-batched forces the "
-                         "sequential batch=1 dual-pass (like TensorRT). Bit-identical either way.")
+                         "sequential batch=1 dual-pass (like TensorRT). Bit-identical at "
+                         "fp32/w8a32; ~80 dB at w16a32; w8a8-dyn diverges by design (batch-"
+                         "shared activation scales) — use --no-cfg-batched to reproduce "
+                         "sequential baselines with w8a8-dyn.")
     # Runtime / output
     ap.add_argument("--threads", type=int, default=8, help="XNNPACK CPU threads.")
     ap.add_argument("--free-models", action=argparse.BooleanOptionalAction, default=True,
@@ -551,8 +545,14 @@ def main():
     # A relative path that already starts with "output/" is taken as-is (relative to
     # cwd) so `--out output/foo.wav` doesn't become output/output/foo.wav.
     if args.out is None:
-        slug = re.sub(r'[^a-z0-9]+', '_', args.prompt.lower()).strip('_')[:48]
-        args.out = f"{slug}_{args.seed}.wav" if slug else f"out_{args.seed}.wav"
+        slug = re.sub(r'[^a-z0-9]+', '_', args.prompt.lower()).strip('_')[:48] or "out"
+        # non-fp32 runs get a precision suffix so same-prompt/seed A/B runs across
+        # --precision values don't overwrite each other
+        if args.dit_precision == args.decoder_precision:
+            prec_tag = "" if args.precision == "fp32" else f"_{args.precision}"
+        else:
+            prec_tag = f"_dit-{args.dit_precision}_dec-{args.decoder_precision}"
+        args.out = f"{slug}{prec_tag}_{args.seed}.wav"
     out_path = Path(args.out)
     if not out_path.is_absolute() and out_path.parts[:1] != ("output",):
         out_path = REPO / "output" / out_path

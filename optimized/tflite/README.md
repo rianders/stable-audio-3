@@ -55,14 +55,15 @@ lazy-download from HuggingFace on first use.
 | `--precision` | legacy name | size (sm DiT / medium DiT / codecs) | quality | CPU speed |
 |---------------|-------------|-------------------------------------|---------|-----------|
 | `fp32` (default) | — | 1.8 GB / 5.8 GB / 0.2–1.8 GB | reference | 1× — on CPU this is *also* the fast choice |
-| `w16a32` | fp16mixed | 0.9 / 2.9 / 0.1–0.9 GB | ≈lossless (fp16 weights, fp32 activations; 62–75 dB per-forward) | ~1.3× slower (XNNPACK dequantizes per-matmul) |
+| `w16a32` | fp16mixed | 0.9 / 2.9 / 0.1–0.9 GB | ≈lossless (fp16 weights, fp32 activations; 62–75 dB per-forward) | 1.5–3× slower, model-dependent (XNNPACK dequantizes per-matmul) |
 | `w8a32` | woint8 | 0.45 / 1.5 / 0.05–0.5 GB | GPTQ int8 weights — codecs transparent (40–46 dB); DiT gives a *different but plausible* sample | ≈fp32 |
-| `w8a8-dyn` | dynint8 | 0.45 / 1.5 / 0.05–0.5 GB | lowest (int8 weights + activations, per-invoke dynamic scales) | fastest (~1.3×) |
+| `w8a8-dyn` | dynint8 | 0.45 / 1.5 / 0.05–0.5 GB | lowest (int8 weights + activations, per-invoke dynamic scales) | fastest (~1.2–1.3×) |
 
 *(Names follow the wXaY convention — weight/activation bit-widths, as in LLM releases:
 quantization here touches the FULLY_CONNECTED weights; activations stay fp32 except
 `w8a8-dyn`, whose int8×int8 matmuls are what make it the only faster-than-fp32 variant.
-All bit-widths are per-channel weight grids; "16" is fp16 — there is no int16 variant.)*
+All bit-widths are per-channel weight grids; "16" is fp16 — there is no int16 variant.
+Speed factors measured on an Apple M4 Pro MacBook Pro, XNNPACK, 8 threads.)*
 
 Two things worth knowing, both counter-intuitive:
 
@@ -199,7 +200,7 @@ For sub-realtime latency on a supported device, prefer the GPU siblings:
 | `--seed`              | random   | Set for reproducibility; the chosen seed is printed at the end        |
 | `--cfg`               | 1.0      | Guidance scale; 1.0 = off, >1 toward prompt, <1 toward uncond. ≠1 runs cond+uncond each step |
 | `--apg`               | 1.0      | Adaptive Projected Guidance; only matters when `--cfg ≠ 1`            |
-| `--cfg-batched`       | on       | When `--cfg ≠ 1`, run cond+uncond as one batch=2 invoke on the variable-batch DiT (~7–29% faster on Apple-Silicon AMX). `--no-cfg-batched` → sequential batch=1 dual-pass. Bit-identical |
+| `--cfg-batched`       | on       | When `--cfg ≠ 1`, run cond+uncond as one batch=2 invoke on the variable-batch DiT (~7–29% faster on Apple-Silicon AMX). `--no-cfg-batched` → sequential batch=1 dual-pass. Bit-identical at `fp32`/`w8a32` — see [Precision variants](#precision-variants---precision) for `w16a32`/`w8a8-dyn` |
 | `--init-audio`        | —        | WAV (any format via ffmpeg) input for audio-to-audio / inpaint       |
 | `--init-noise-level`  | 1.0      | σmax; 0.4–0.8 typical for variation, 1.0 = full regen, >1 = overshoot |
 | `--inpaint-range`     | —        | `START,END` seconds; regenerate that span, keep the rest              |
@@ -281,9 +282,11 @@ is the one weight that IS committed, since the `.tflite` T5Gemma is encoder-only
 - **CFG (`--cfg ≠ 1`)** combines a cond and an uncond velocity in denoised space
   (optional APG). The canonical DiT is **variable-batch**, so by default cond+uncond
   run as **one batch=2 invoke per step** (`--cfg-batched`) — ~7–29% faster on
-  Apple-Silicon (the AMX matrix unit amortizes the weight loads across both rows).
+  Apple-Silicon (the AMX matrix unit amortizes the weight loads across both rows;
+  measured on an M4 Pro MacBook Pro).
   `--no-cfg-batched` falls back to a sequential batch=1 dual-pass (like the TensorRT
-  release, whose engine is static-batch=1); the two are bit-identical.
+  release, whose engine is static-batch=1); the two are bit-identical at `fp32`/`w8a32`
+  (~80 dB at `w16a32`; `w8a8-dyn` diverges by design — batch-shared activation scales).
 
 ## License & attribution
 

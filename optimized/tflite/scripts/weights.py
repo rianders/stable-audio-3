@@ -63,7 +63,18 @@ BUNDLE_SIZES = {
 # lazy-download on first use. w16a32 = fp16 weights (half size, ≈lossless, slower on
 # CPU); w8a32 / w8a8-dyn = GPTQ-calibrated int8 weights.
 QUANT_PRECISIONS = ("w16a32", "w8a32", "w8a8-dyn")
-_QUANT_DIRS = ("sa3-sm-music", "sa3-sm-sfx", "sa3-m", "same-s", "same-l")
+PRECISIONS = ("fp32",) + QUANT_PRECISIONS   # everything --precision accepts
+DIT_SUBDIR = {"sm-music": "sa3-sm-music", "sm-sfx": "sa3-sm-sfx", "medium": "sa3-m"}
+
+
+def dit_rel(dit: str, precision: str = "fp32") -> str:
+    """Local rel path of a DiT model file for (family, precision)."""
+    return f"models/tflite/{DIT_SUBDIR[dit]}/dit_{precision}.tflite"
+
+
+def dec_rel(dec: str, precision: str = "fp32") -> str:
+    """Local rel path of a SAME codec decoder file for (codec, precision)."""
+    return f"models/tflite/{dec}/dec_{precision}.tflite"
 
 # Flat (local_rel_path → hf_path) lookup — used by sa3_tflite.py for lazy
 # auto-download at load time.
@@ -73,11 +84,13 @@ for _items in DIT_BUNDLES.values():
         FLAT_MANIFEST[_rel] = _hf
 for _rel, _hf in SHARED:
     FLAT_MANIFEST[_rel] = _hf
-for _sub in _QUANT_DIRS:
-    _kind = "dec" if _sub.startswith("same-") else "dit"
-    for _prec in QUANT_PRECISIONS:
-        _rel = f"models/tflite/{_sub}/{_kind}_{_prec}.tflite"
-        FLAT_MANIFEST[_rel] = f"tflite/{_sub}/{_kind}_{_prec}.tflite"
+for _prec in QUANT_PRECISIONS:
+    for _fam in DIT_SUBDIR:
+        _rel = dit_rel(_fam, _prec)
+        FLAT_MANIFEST[_rel] = _rel.replace("models/tflite/", "tflite/", 1)
+    for _dec in ("same-s", "same-l"):
+        _rel = dec_rel(_dec, _prec)
+        FLAT_MANIFEST[_rel] = _rel.replace("models/tflite/", "tflite/", 1)
 
 
 def _hf_token_configured() -> bool:
