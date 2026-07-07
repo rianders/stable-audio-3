@@ -37,7 +37,7 @@ sys.path.insert(0, str(REPO))                    # so `from models.defs.* import
 sys.path.insert(0, str(REPO / "scripts"))        # so `from weights import *` resolves
 
 from models.defs import tflite_pipeline as P    # Tokenizer, T5GemmaTFLite, build_pingpong_schedule, make_noise, sample, save_wav
-from weights import ensure_local, is_present, PRECISIONS, dit_rel, dec_rel
+from weights import ensure_local, is_present, PRECISIONS, dit_rel, dec_rel, enc_rel
 
 SAMPLE_RATE = 44100
 SAMPLES_PER_LATENT = 4096
@@ -60,10 +60,7 @@ MIN_SIGMA = 0.01   # rf_denoiser is undefined at t≈0 → NaN below this
 # the download manifest — a precision the CLI accepts is guaranteed downloadable).
 DIT_REL = {d: dit_rel(d) for d in ("sm-music", "sm-sfx", "medium")}   # fp32 (picker)
 DEC_REL = {d: dec_rel(d) for d in ("same-s", "same-l")}
-ENC_REL = {
-    "same-s": "models/tflite/same-s/enc_fp32.tflite",
-    "same-l": "models/tflite/same-l/enc_fp32.tflite",
-}
+ENC_REL = {d: enc_rel(d) for d in ("same-s", "same-l")}
 T5_REL = "models/tflite/t5gemma/encoder_fp16.tflite"
 DEFAULT_DECODER = {"sm-music": "same-s", "sm-sfx": "same-s", "medium": "same-l"}
 
@@ -171,7 +168,7 @@ def _preflight_download(args, dec) -> None:
     clearly separate setup step."""
     needed = [T5_REL, dit_rel(args.dit, args.dit_precision), dec_rel(dec, args.decoder_precision)]
     if args.init_audio:
-        needed.append(ENC_REL[dec])
+        needed.append(enc_rel(dec, args.encoder_precision))
     missing = [p for p in needed if not is_present(p)]
     if not missing:
         return
@@ -481,7 +478,8 @@ def main():
                          "fast choice) | 'w16a32' (fp16 weights, half size, ≈lossless, 1.5-3× "
                          "slower) | 'w8a32' (GPTQ int8 weights, ¼ size at fp32 speed) | "
                          "'w8a8-dyn' (dynamic int8, fastest, lower quality). "
-                         "Encoders + T5Gemma are single-precision, as in TRT.")
+                         "Applies to the DiT, codec decoder, and (for a2a/inpaint) the "
+                         "encoder; T5Gemma is single-precision. Per-component overrides below.")
     ap.add_argument("--dit-precision", choices=list(PRECISIONS), default=None,
                     help="Override --precision for the DiT only (e.g. a quantized DiT "
                          "with an fp32 codec).")
@@ -489,6 +487,11 @@ def main():
                     help="Override --precision for the SAME codec only. The codec runs "
                          "once on a fixed latent, so its precision maps directly to "
                          "audio quality (w8a32 is transparent at 40-46 dB).")
+    ap.add_argument("--encoder-precision", choices=list(PRECISIONS), default=None,
+                    help="Override --precision for the SAME encoder (audio-to-audio / "
+                         "inpainting only). Encoder int8 is naive-quantized, not GPTQ: "
+                         "w16a32 ≈lossless (66-71 dB latent), w8a32 32/36 dB (same-s/"
+                         "same-l), w8a8-dyn 24/29 dB.")
     # Sampling
     ap.add_argument("--seconds", type=float, default=30.0,
                     help="Output length. T_lat = ceil(seconds*44100/4096) (natural ceil, decoder-"
@@ -528,6 +531,7 @@ def main():
     # per-component overrides fall back to the shared --precision
     args.dit_precision = args.dit_precision or args.precision
     args.decoder_precision = args.decoder_precision or args.precision
+    args.encoder_precision = args.encoder_precision or args.precision
 
     # Interactive fills (match MLX/TRT).
     args = prompt_user_if_missing(args)
@@ -596,7 +600,8 @@ def main():
         print(f"  {k('neg prompt')}  {bold(repr(args.negative_prompt))}{suffix}")
     line = f"  {k('dit')}  {magenta(args.dit)}   {k('decoder')}  {magenta(dec)}"
     if args.init_audio:
-        line += f"   {k('encoder')}  {magenta(dec)}"
+        enc_note = "" if args.encoder_precision == args.dit_precision else f" ({args.encoder_precision})"
+        line += f"   {k('encoder')}  {magenta(dec + enc_note)}"
     prec_disp = (args.dit_precision if args.dit_precision == args.decoder_precision
                  else f"dit {args.dit_precision} · codec {args.decoder_precision}")
     line += f"   {k('precision')}  {magenta(prec_disp)}   {k('threads')}  {args.threads}"
@@ -667,7 +672,7 @@ def main():
             audio_in = np.pad(audio_in, ((0, 0), (0, pad)))
             init_action = f"zero-padded by {pad} samples"
         audio_in = audio_in[None]                            # (1,2,target_samples)
-        enc = BakedEncoder(ensure_local(ENC_REL[dec]), args.threads, needs_even=(dec == "same-s"))
+        enc = BakedEncoder(ensure_local(enc_rel(dec, args.encoder_precision)), args.threads, needs_even=(dec == "same-s"))
         init_latents = enc.encode(audio_in, T_lat)           # (1,256,T_lat)
         enc_ms = (time.perf_counter() - t0) * 1000
         stage(TAG["enc"], f"Encode init audio → latents ({dec})", enc_ms)

@@ -76,6 +76,13 @@ def dec_rel(dec: str, precision: str = "fp32") -> str:
     """Local rel path of a SAME codec decoder file for (codec, precision)."""
     return f"models/tflite/{dec}/dec_{precision}.tflite"
 
+
+def enc_rel(dec: str, precision: str = "fp32") -> str:
+    """Local rel path of a SAME codec encoder file for (codec, precision).
+    Note: encoder int8 variants are naive min/max quantized (not GPTQ like the
+    DiT/decoder int8) — w8a32 measures 32/36 dB latent PSNR (same-s/same-l)."""
+    return f"models/tflite/{dec}/enc_{precision}.tflite"
+
 # Flat (local_rel_path → hf_path) lookup — used by sa3_tflite.py for lazy
 # auto-download at load time.
 FLAT_MANIFEST: dict[str, str] = {}
@@ -89,8 +96,8 @@ for _prec in QUANT_PRECISIONS:
         _rel = dit_rel(_fam, _prec)
         FLAT_MANIFEST[_rel] = _rel.replace("models/tflite/", "tflite/", 1)
     for _dec in ("same-s", "same-l"):
-        _rel = dec_rel(_dec, _prec)
-        FLAT_MANIFEST[_rel] = _rel.replace("models/tflite/", "tflite/", 1)
+        for _rel in (dec_rel(_dec, _prec), enc_rel(_dec, _prec)):
+            FLAT_MANIFEST[_rel] = _rel.replace("models/tflite/", "tflite/", 1)
 
 
 def _hf_token_configured() -> bool:

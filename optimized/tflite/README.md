@@ -46,8 +46,9 @@ prompt ─▶ T5Gemma encoder ─▶ DiT pingpong sampler ─▶ SAME-S/L decode
 ## Precision variants (`--precision`)
 
 Same flag as the TensorRT CLI's `--precision`; the values use the wXaY naming
-(weights/activations bit-widths). One flag switches the DiT **and**
-decoder together; the encoder + T5Gemma stay single-precision (as in TRT). All
+(weights/activations bit-widths). One flag switches the DiT, the codec decoder,
+and (for audio-to-audio / inpainting) the encoder together; T5Gemma stays
+single-precision. All
 variants keep the full feature set: variable length (any `--seconds`, odd or even
 latent counts) and variable batch (batched or sequential CFG). Missing files
 lazy-download from HuggingFace on first use.
@@ -89,9 +90,16 @@ with `w8a8-dyn` when you need run-to-run reproducibility against sequential base
 ./sa3 --prompt "lofi house loop" --dit sm-music --decoder same-s --precision w8a8-dyn
 ```
 
-`--dit-precision` / `--decoder-precision` override the shared flag per component —
-useful because the two react to quantization very differently (the codec's precision
-maps directly to audio fidelity; the DiT's changes *which* sample you get):
+**Encoder variants** (used by audio-to-audio / inpainting) exist at the same
+precisions but are naive min/max int8, not GPTQ (measured latent PSNR vs fp32,
+same-s / same-l): `w16a32` 66 / 71 dB (≈lossless), `w8a32` 32 / 36 dB, `w8a8-dyn`
+24 / 29 dB. For quality-sensitive inpainting keep the encoder at fp32 via
+`--encoder-precision fp32`.
+
+`--dit-precision` / `--decoder-precision` / `--encoder-precision` override the shared
+flag per component — useful because they react to quantization very differently (the
+codec's precision maps directly to audio fidelity; the DiT's changes *which* sample
+you get; the encoder's affects a2a/inpaint latents):
 
 ```bash
 # fastest DiT, reference-quality codec
