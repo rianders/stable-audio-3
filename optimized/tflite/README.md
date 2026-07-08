@@ -91,10 +91,10 @@ with `w8a8-dyn` when you need run-to-run reproducibility against sequential base
 ```
 
 **Encoder variants** (used by audio-to-audio / inpainting) exist at the same
-precisions but are naive min/max int8, not GPTQ (measured latent PSNR vs fp32,
-same-s / same-l): `w16a32` 66 / 71 dB (≈lossless), `w8a32` 32 / 36 dB, `w8a8-dyn`
-24 / 29 dB. For quality-sensitive inpainting keep the encoder at fp32 via
-`--encoder-precision fp32`.
+precisions; int8 weights are GPTQ-calibrated on real audio, like the DiT and codec
+(measured latent PSNR vs fp32, same-s / same-l): `w16a32` 66 / 71 dB (≈lossless),
+`w8a32` 36 / 46 dB, `w8a8-dyn` 24 / 30 dB. For the most quality-sensitive
+inpainting you can still pin `--encoder-precision fp32`.
 
 `--dit-precision` / `--decoder-precision` / `--encoder-precision` override the shared
 flag per component — useful because they react to quantization very differently (the

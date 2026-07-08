@@ -489,9 +489,9 @@ def main():
                          "audio quality (w8a32 is transparent at 40-46 dB).")
     ap.add_argument("--encoder-precision", choices=list(PRECISIONS), default=None,
                     help="Override --precision for the SAME encoder (audio-to-audio / "
-                         "inpainting only). Encoder int8 is naive-quantized, not GPTQ: "
-                         "w16a32 ≈lossless (66-71 dB latent), w8a32 32/36 dB (same-s/"
-                         "same-l), w8a8-dyn 24/29 dB.")
+                         "inpainting only). Latent PSNR vs fp32 (same-s/same-l): "
+                         "w16a32 ≈lossless (66/71 dB), w8a32 (GPTQ) 36/46 dB, "
+                         "w8a8-dyn 24/30 dB.")
     # Sampling
     ap.add_argument("--seconds", type=float, default=30.0,
                     help="Output length. T_lat = ceil(seconds*44100/4096) (natural ceil, decoder-"

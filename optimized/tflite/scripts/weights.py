@@ -79,8 +79,8 @@ def dec_rel(dec: str, precision: str = "fp32") -> str:
 
 def enc_rel(dec: str, precision: str = "fp32") -> str:
     """Local rel path of a SAME codec encoder file for (codec, precision).
-    Note: encoder int8 variants are naive min/max quantized (not GPTQ like the
-    DiT/decoder int8) — w8a32 measures 32/36 dB latent PSNR (same-s/same-l)."""
+    Encoder int8 is GPTQ-calibrated on real audio (torch-free, in-place on the
+    tflite graph) — w8a32 measures 36/46 dB latent PSNR (same-s/same-l)."""
     return f"models/tflite/{dec}/enc_{precision}.tflite"
 
 # Flat (local_rel_path → hf_path) lookup — used by sa3_tflite.py for lazy
