@@ -58,6 +58,31 @@ BUNDLE_SIZES = {
 }
 # T5Gemma (shared, fp16) adds ~0.6 GB the first time any bundle is fetched.
 
+# Quantized DiT + decoder variants (selected via sa3_tflite.py --precision; wXaY =
+# weight/activation bit-widths, "16" = fp16). Not part of the install bundles — they
+# lazy-download on first use. w16a32 = fp16 weights (half size, ≈lossless, slower on
+# CPU); w8a32 / w8a8-dyn = GPTQ-calibrated int8 weights.
+QUANT_PRECISIONS = ("w16a32", "w8a32", "w8a8-dyn")
+PRECISIONS = ("fp32",) + QUANT_PRECISIONS   # everything --precision accepts
+DIT_SUBDIR = {"sm-music": "sa3-sm-music", "sm-sfx": "sa3-sm-sfx", "medium": "sa3-m"}
+
+
+def dit_rel(dit: str, precision: str = "fp32") -> str:
+    """Local rel path of a DiT model file for (family, precision)."""
+    return f"models/tflite/{DIT_SUBDIR[dit]}/dit_{precision}.tflite"
+
+
+def dec_rel(dec: str, precision: str = "fp32") -> str:
+    """Local rel path of a SAME codec decoder file for (codec, precision)."""
+    return f"models/tflite/{dec}/dec_{precision}.tflite"
+
+
+def enc_rel(dec: str, precision: str = "fp32") -> str:
+    """Local rel path of a SAME codec encoder file for (codec, precision).
+    Encoder int8 is GPTQ-calibrated on real audio (torch-free, in-place on the
+    tflite graph) — w8a32 measures 36/46 dB latent PSNR (same-s/same-l)."""
+    return f"models/tflite/{dec}/enc_{precision}.tflite"
+
 # Flat (local_rel_path → hf_path) lookup — used by sa3_tflite.py for lazy
 # auto-download at load time.
 FLAT_MANIFEST: dict[str, str] = {}
@@ -66,6 +91,13 @@ for _items in DIT_BUNDLES.values():
         FLAT_MANIFEST[_rel] = _hf
 for _rel, _hf in SHARED:
     FLAT_MANIFEST[_rel] = _hf
+for _prec in QUANT_PRECISIONS:
+    for _fam in DIT_SUBDIR:
+        _rel = dit_rel(_fam, _prec)
+        FLAT_MANIFEST[_rel] = _rel.replace("models/tflite/", "tflite/", 1)
+    for _dec in ("same-s", "same-l"):
+        for _rel in (dec_rel(_dec, _prec), enc_rel(_dec, _prec)):
+            FLAT_MANIFEST[_rel] = _rel.replace("models/tflite/", "tflite/", 1)
 
 
 def _hf_token_configured() -> bool:

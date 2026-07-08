@@ -43,6 +43,70 @@ prompt ─▶ T5Gemma encoder ─▶ DiT pingpong sampler ─▶ SAME-S/L decode
                   optional: encoder + init audio (audio-to-audio / inpaint)
 ```
 
+## Precision variants (`--precision`)
+
+Same flag as the TensorRT CLI's `--precision`; the values use the wXaY naming
+(weights/activations bit-widths). One flag switches the DiT, the codec decoder,
+and (for audio-to-audio / inpainting) the encoder together; T5Gemma stays
+single-precision. All
+variants keep the full feature set: variable length (any `--seconds`, odd or even
+latent counts) and variable batch (batched or sequential CFG). Missing files
+lazy-download from HuggingFace on first use.
+
+| `--precision` | legacy name | size (sm DiT / medium DiT / codecs) | quality | CPU speed |
+|---------------|-------------|-------------------------------------|---------|-----------|
+| `fp32` (default) | — | 1.8 GB / 5.8 GB / 0.2–1.8 GB | reference | 1× — on CPU this is *also* the fast choice |
+| `w16a32` | fp16mixed | 0.9 / 2.9 / 0.1–0.9 GB | ≈lossless (fp16 weights, fp32 activations; 62–75 dB per-forward) | 1.5–3× slower, model-dependent (XNNPACK dequantizes per-matmul) |
+| `w8a32` | woint8 | 0.45 / 1.5 / 0.05–0.5 GB | GPTQ int8 weights — codecs transparent (40–46 dB); DiT gives a *different but plausible* sample | ≈fp32 |
+| `w8a8-dyn` | dynint8 | 0.45 / 1.5 / 0.05–0.5 GB | lowest (int8 weights + activations, per-invoke dynamic scales) | fastest (~1.2–1.3×) |
+
+*(Names follow the wXaY convention — weight/activation bit-widths, as in LLM releases:
+quantization here touches the FULLY_CONNECTED weights; activations stay fp32 except
+`w8a8-dyn`, whose int8×int8 matmuls are what make it the only faster-than-fp32 variant.
+All bit-widths are per-channel weight grids; "16" is fp16 — there is no int16 variant.
+Speed factors measured on an Apple M4 Pro MacBook Pro, XNNPACK, 8 threads.)*
+
+Two things worth knowing, both counter-intuitive:
+
+- **Quantization buys *size*, not speed, on CPU.** Weight-only int8 dequantizes
+  to fp32 before each matmul, so they run at fp32 speed; fp16 is *slower* than fp32.
+  Only `dynint8` (quantized activations → true int8 matmuls) is faster.
+- **DiT quantization error compounds.** The 8-step sampler is chaotically sensitive:
+  per-step weight error turns into a *different* (still plausible) sample rather than
+  a noisy version of the fp32 one. Judge DiT precisions by ear; decoder precisions
+  by PSNR (they run once on a fixed latent).
+
+One CFG note: batched and sequential CFG are bit-identical for `fp32`/`w8a32` and
+inaudibly different (~80 dB) for `w16a32`, but under `w8a8-dyn` the batch=2
+invoke shares activation-quantization scales across the cond/uncond rows, so batched
+CFG yields a *different plausible sample* than sequential. Pass `--no-cfg-batched`
+with `w8a8-dyn` when you need run-to-run reproducibility against sequential baselines.
+
+```bash
+# quarter-size models, same speed and near-identical quality on the decoder side
+./sa3 --prompt "lofi house loop" --dit sm-music --decoder same-s --precision w8a32
+
+# fastest CPU inference (quality tradeoff)
+./sa3 --prompt "lofi house loop" --dit sm-music --decoder same-s --precision w8a8-dyn
+```
+
+**Encoder variants** (used by audio-to-audio / inpainting) exist at the same
+precisions; int8 weights are GPTQ-calibrated on real audio, like the DiT and codec
+(measured latent PSNR vs fp32, same-s / same-l): `w16a32` 66 / 71 dB (≈lossless),
+`w8a32` 36 / 46 dB, `w8a8-dyn` 24 / 30 dB. For the most quality-sensitive
+inpainting you can still pin `--encoder-precision fp32`.
+
+`--dit-precision` / `--decoder-precision` / `--encoder-precision` override the shared
+flag per component — useful because they react to quantization very differently (the
+codec's precision maps directly to audio fidelity; the DiT's changes *which* sample
+you get; the encoder's affects a2a/inpaint latents):
+
+```bash
+# fastest DiT, reference-quality codec
+./sa3 --prompt "lofi house loop" --dit sm-music --decoder same-s \
+      --precision fp32 --dit-precision w8a8-dyn
+```
+
 ## Install
 
 ```bash
@@ -144,7 +208,7 @@ For sub-realtime latency on a supported device, prefer the GPU siblings:
 | `--seed`              | random   | Set for reproducibility; the chosen seed is printed at the end        |
 | `--cfg`               | 1.0      | Guidance scale; 1.0 = off, >1 toward prompt, <1 toward uncond. ≠1 runs cond+uncond each step |
 | `--apg`               | 1.0      | Adaptive Projected Guidance; only matters when `--cfg ≠ 1`            |
-| `--cfg-batched`       | on       | When `--cfg ≠ 1`, run cond+uncond as one batch=2 invoke on the variable-batch DiT (~7–29% faster on Apple-Silicon AMX). `--no-cfg-batched` → sequential batch=1 dual-pass. Bit-identical |
+| `--cfg-batched`       | on       | When `--cfg ≠ 1`, run cond+uncond as one batch=2 invoke on the variable-batch DiT (~7–29% faster on Apple-Silicon AMX). `--no-cfg-batched` → sequential batch=1 dual-pass. Bit-identical at `fp32`/`w8a32` — see [Precision variants](#precision-variants---precision) for `w16a32`/`w8a8-dyn` |
 | `--init-audio`        | —        | WAV (any format via ffmpeg) input for audio-to-audio / inpaint       |
 | `--init-noise-level`  | 1.0      | σmax; 0.4–0.8 typical for variation, 1.0 = full regen, >1 = overshoot |
 | `--inpaint-range`     | —        | `START,END` seconds; regenerate that span, keep the rest              |
@@ -226,9 +290,11 @@ is the one weight that IS committed, since the `.tflite` T5Gemma is encoder-only
 - **CFG (`--cfg ≠ 1`)** combines a cond and an uncond velocity in denoised space
   (optional APG). The canonical DiT is **variable-batch**, so by default cond+uncond
   run as **one batch=2 invoke per step** (`--cfg-batched`) — ~7–29% faster on
-  Apple-Silicon (the AMX matrix unit amortizes the weight loads across both rows).
+  Apple-Silicon (the AMX matrix unit amortizes the weight loads across both rows;
+  measured on an M4 Pro MacBook Pro).
   `--no-cfg-batched` falls back to a sequential batch=1 dual-pass (like the TensorRT
-  release, whose engine is static-batch=1); the two are bit-identical.
+  release, whose engine is static-batch=1); the two are bit-identical at `fp32`/`w8a32`
+  (~80 dB at `w16a32`; `w8a8-dyn` diverges by design — batch-shared activation scales).
 
 ## License & attribution
 

@@ -21,7 +21,8 @@ prompt's T5 output (or an all-zero hidden+mask, which the in-graph conditioner t
 learned padding embeddings) — it does NOT zero cross_attn like MLX (our DiT bakes the
 conditioner, so there's no raw cross_attn). CFG runs cond+uncond as ONE batch=2 invoke on the
 variable-batch DiT (--cfg-batched, default; ~7-29%% faster on Apple-Silicon AMX) or as a
-sequential batch=1 dual-pass (--no-cfg-batched). Both are bit-identical.
+sequential batch=1 dual-pass (--no-cfg-batched). Bit-identical at fp32/w8a32; ~80 dB at
+w16a32; w8a8-dyn diverges by design (activation scales shared across the batch).
 
 All model files auto-download from HuggingFace (stabilityai/stable-audio-3-optimized)
 on first use and symlink into models/tflite/ from the HF cache. See scripts/weights.py.
@@ -36,7 +37,7 @@ sys.path.insert(0, str(REPO))                    # so `from models.defs.* import
 sys.path.insert(0, str(REPO / "scripts"))        # so `from weights import *` resolves
 
 from models.defs import tflite_pipeline as P    # Tokenizer, T5GemmaTFLite, build_pingpong_schedule, make_noise, sample, save_wav
-from weights import ensure_local, is_present
+from weights import ensure_local, is_present, PRECISIONS, dit_rel, dec_rel, enc_rel
 
 SAMPLE_RATE = 44100
 SAMPLES_PER_LATENT = 4096
@@ -45,19 +46,21 @@ COND_DIM = 768
 MIN_SIGMA = 0.01   # rf_denoiser is undefined at t≈0 → NaN below this
 
 # ─── Model manifest (local rel paths; resolved via weights.ensure_local at load) ───
-DIT_REL = {
-    "sm-music": "models/tflite/sa3-sm-music/dit_fp32.tflite",
-    "sm-sfx":   "models/tflite/sa3-sm-sfx/dit_fp32.tflite",
-    "medium":   "models/tflite/sa3-m/dit_fp32.tflite",
-}
-DEC_REL = {
-    "same-s": "models/tflite/same-s/dec_fp32.tflite",
-    "same-l": "models/tflite/same-l/dec_fp32.tflite",
-}
-ENC_REL = {
-    "same-s": "models/tflite/same-s/enc_fp32.tflite",
-    "same-l": "models/tflite/same-l/enc_fp32.tflite",
-}
+# --precision picks the DiT + decoder variant (same flag as the TensorRT release's
+# --precision; values here use the wXaY convention — weights/activations bit-widths,
+# "16" = fp16, there is no int16). Encoders + T5Gemma have one precision, like TRT.
+#   fp32      reference models (default — on CPU fp16 is SLOWER than fp32, so unlike
+#             TRT the fastest-and-accurate choice is fp32)
+#   w16a32    fp16 weights / fp32 activations — half size, ≈lossless, 1.5-3× slower
+#             on an M4 Pro (legacy name: fp16mixed; ≈ TRT's fp16mixed in spirit,
+#             storage-only here)
+#   w8a32     GPTQ weight-only int8 — ¼ size at fp32 speed (legacy: woint8)
+#   w8a8-dyn  GPTQ dynamic int8 — fastest (~1.2-1.3×), lowest quality (legacy: dynint8)
+# PRECISIONS + the path builders live in weights.py (single source of truth with
+# the download manifest — a precision the CLI accepts is guaranteed downloadable).
+DIT_REL = {d: dit_rel(d) for d in ("sm-music", "sm-sfx", "medium")}   # fp32 (picker)
+DEC_REL = {d: dec_rel(d) for d in ("same-s", "same-l")}
+ENC_REL = {d: enc_rel(d) for d in ("same-s", "same-l")}
 T5_REL = "models/tflite/t5gemma/encoder_fp16.tflite"
 DEFAULT_DECODER = {"sm-music": "same-s", "sm-sfx": "same-s", "medium": "same-l"}
 
@@ -163,9 +166,9 @@ def _preflight_download(args, dec) -> None:
     BEFORE the banner prints and BEFORE the wall-clock starts. Network time then
     isn't charged against '×realtime' and the user sees download progress as a
     clearly separate setup step."""
-    needed = [T5_REL, DIT_REL[args.dit], DEC_REL[dec]]
+    needed = [T5_REL, dit_rel(args.dit, args.dit_precision), dec_rel(dec, args.decoder_precision)]
     if args.init_audio:
-        needed.append(ENC_REL[dec])
+        needed.append(enc_rel(dec, args.encoder_precision))
     missing = [p for p in needed if not is_present(p)]
     if not missing:
         return
@@ -228,8 +231,9 @@ class BakedDiT:
 
     cfg==1.0  -> one batch=1 forward with the (cond) T5 output.
     cfg!=1.0  -> CFG combining a cond and an uncond (null_hidden/null_mask) velocity in
-                 denoised space with optional APG. Two interchangeable backends (bit-identical
-                 output; auto-falls-back to batch=1 for cfg==1.0):
+                 denoised space with optional APG. Two backends (bit-identical output at
+                 fp32/w8a32; ~80 dB at w16a32; w8a8-dyn diverges — batch-shared activation
+                 scales; auto-falls-back to batch=1 for cfg==1.0):
       batched=True  (default): ONE batch=2 invoke/step — cond=row0, uncond=row1 — on the
                     canonical variable-batch DiT (its batch axis is dynamic). ~7-29%% faster
                     on Apple-Silicon (the AMX matrix unit amortizes weight loads across the 2 rows).
@@ -440,6 +444,7 @@ class _HelpfulParser(argparse.ArgumentParser):
 def main():
     ap = _HelpfulParser(
         description="SA3 text-to-audio (+ audio-to-audio + inpainting + CFG) — baked-I/O varlen TFLite / CPU",
+        allow_abbrev=False,   # --pr/--di/--de became ambiguous once *-precision flags landed
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=("modes\n"
                 "  text-to-audio    --prompt P\n"
@@ -467,6 +472,26 @@ def main():
     ap.add_argument("--decoder", choices=["same-s", "same-l"], default=None,
                     help="Audio decoder. Default: same-s for sm-music/sm-sfx, same-l for medium. "
                          "If omitted, prompts interactively with an arrow-key picker.")
+    ap.add_argument("--precision", choices=list(PRECISIONS), default="fp32",
+                    help="DiT + decoder precision, wXaY = weight/activation bits (same flag "
+                         "as the TensorRT CLI): 'fp32' (default — reference; on CPU also the "
+                         "fast choice) | 'w16a32' (fp16 weights, half size, ≈lossless, 1.5-3× "
+                         "slower) | 'w8a32' (GPTQ int8 weights, ¼ size at fp32 speed) | "
+                         "'w8a8-dyn' (dynamic int8, fastest, lower quality). "
+                         "Applies to the DiT, codec decoder, and (for a2a/inpaint) the "
+                         "encoder; T5Gemma is single-precision. Per-component overrides below.")
+    ap.add_argument("--dit-precision", choices=list(PRECISIONS), default=None,
+                    help="Override --precision for the DiT only (e.g. a quantized DiT "
+                         "with an fp32 codec).")
+    ap.add_argument("--decoder-precision", choices=list(PRECISIONS), default=None,
+                    help="Override --precision for the SAME codec only. The codec runs "
+                         "once on a fixed latent, so its precision maps directly to "
+                         "audio quality (w8a32 is transparent at 40-46 dB).")
+    ap.add_argument("--encoder-precision", choices=list(PRECISIONS), default=None,
+                    help="Override --precision for the SAME encoder (audio-to-audio / "
+                         "inpainting only). Latent PSNR vs fp32 (same-s/same-l): "
+                         "w16a32 ≈lossless (66/71 dB), w8a32 (GPTQ) 36/46 dB, "
+                         "w8a8-dyn 24/30 dB.")
     # Sampling
     ap.add_argument("--seconds", type=float, default=30.0,
                     help="Output length. T_lat = ceil(seconds*44100/4096) (natural ceil, decoder-"
@@ -487,7 +512,10 @@ def main():
     ap.add_argument("--cfg-batched", action=argparse.BooleanOptionalAction, default=True,
                     help="When --cfg≠1.0, run cond+uncond as ONE batch=2 invoke on the variable-batch "
                          "DiT (default; ~7-29%% faster on Apple-Silicon AMX). --no-cfg-batched forces the "
-                         "sequential batch=1 dual-pass (like TensorRT). Bit-identical either way.")
+                         "sequential batch=1 dual-pass (like TensorRT). Bit-identical at "
+                         "fp32/w8a32; ~80 dB at w16a32; w8a8-dyn diverges by design (batch-"
+                         "shared activation scales) — use --no-cfg-batched to reproduce "
+                         "sequential baselines with w8a8-dyn.")
     # Runtime / output
     ap.add_argument("--threads", type=int, default=8, help="XNNPACK CPU threads.")
     ap.add_argument("--free-models", action=argparse.BooleanOptionalAction, default=True,
@@ -500,6 +528,10 @@ def main():
     args = ap.parse_args()
     if args.steps < 1:
         ap.error(f"--steps must be ≥ 1 (got {args.steps})")
+    # per-component overrides fall back to the shared --precision
+    args.dit_precision = args.dit_precision or args.precision
+    args.decoder_precision = args.decoder_precision or args.precision
+    args.encoder_precision = args.encoder_precision or args.precision
 
     # Interactive fills (match MLX/TRT).
     args = prompt_user_if_missing(args)
@@ -517,8 +549,14 @@ def main():
     # A relative path that already starts with "output/" is taken as-is (relative to
     # cwd) so `--out output/foo.wav` doesn't become output/output/foo.wav.
     if args.out is None:
-        slug = re.sub(r'[^a-z0-9]+', '_', args.prompt.lower()).strip('_')[:48]
-        args.out = f"{slug}_{args.seed}.wav" if slug else f"out_{args.seed}.wav"
+        slug = re.sub(r'[^a-z0-9]+', '_', args.prompt.lower()).strip('_')[:48] or "out"
+        # non-fp32 runs get a precision suffix so same-prompt/seed A/B runs across
+        # --precision values don't overwrite each other
+        if args.dit_precision == args.decoder_precision:
+            prec_tag = "" if args.precision == "fp32" else f"_{args.precision}"
+        else:
+            prec_tag = f"_dit-{args.dit_precision}_dec-{args.decoder_precision}"
+        args.out = f"{slug}{prec_tag}_{args.seed}.wav"
     out_path = Path(args.out)
     if not out_path.is_absolute() and out_path.parts[:1] != ("output",):
         out_path = REPO / "output" / out_path
@@ -562,8 +600,11 @@ def main():
         print(f"  {k('neg prompt')}  {bold(repr(args.negative_prompt))}{suffix}")
     line = f"  {k('dit')}  {magenta(args.dit)}   {k('decoder')}  {magenta(dec)}"
     if args.init_audio:
-        line += f"   {k('encoder')}  {magenta(dec)}"
-    line += f"   {k('threads')}  {args.threads}"
+        enc_note = "" if args.encoder_precision == args.dit_precision else f" ({args.encoder_precision})"
+        line += f"   {k('encoder')}  {magenta(dec + enc_note)}"
+    prec_disp = (args.dit_precision if args.dit_precision == args.decoder_precision
+                 else f"dit {args.dit_precision} · codec {args.decoder_precision}")
+    line += f"   {k('precision')}  {magenta(prec_disp)}   {k('threads')}  {args.threads}"
     print(line)
     if args.init_audio:
         print(f"  {k('init audio')}  {bold(args.init_audio)}")
@@ -631,7 +672,7 @@ def main():
             audio_in = np.pad(audio_in, ((0, 0), (0, pad)))
             init_action = f"zero-padded by {pad} samples"
         audio_in = audio_in[None]                            # (1,2,target_samples)
-        enc = BakedEncoder(ensure_local(ENC_REL[dec]), args.threads, needs_even=(dec == "same-s"))
+        enc = BakedEncoder(ensure_local(enc_rel(dec, args.encoder_precision)), args.threads, needs_even=(dec == "same-s"))
         init_latents = enc.encode(audio_in, T_lat)           # (1,256,T_lat)
         enc_ms = (time.perf_counter() - t0) * 1000
         stage(TAG["enc"], f"Encode init audio → latents ({dec})", enc_ms)
@@ -660,7 +701,7 @@ def main():
     cfg_note = (("CFG batched (1× batch=2 invoke/step)" if args.cfg_batched
                  else "CFG sequential (2× batch=1 invokes/step)") if args.cfg != 1.0 else "")
     print(f"        {dim('loading baked DiT ' + args.dit + ' ...')}", flush=True)
-    backend = BakedDiT(ensure_local(DIT_REL[args.dit]), T_lat, t5_hidden, mask.astype(np.float32),
+    backend = BakedDiT(ensure_local(dit_rel(args.dit, args.dit_precision)), T_lat, t5_hidden, mask.astype(np.float32),
                        args.seconds, args.threads, cfg=args.cfg, apg=args.apg,
                        null_hidden=null_h, null_mask=null_m, local_add_cond=local_add_cond,
                        batched=args.cfg_batched)
@@ -700,7 +741,7 @@ def main():
     stage(TAG["dec"], f"Decoder ({dec}, audio-out) + WAV")
     t0 = time.perf_counter()
     print(f"        {dim('loading baked decoder ' + dec + ' ...')}", flush=True)
-    decoder = BakedDecoder(ensure_local(DEC_REL[dec]), args.threads, needs_even=(dec == "same-s"))
+    decoder = BakedDecoder(ensure_local(dec_rel(dec, args.decoder_precision)), args.threads, needs_even=(dec == "same-s"))
     load2_ms = (time.perf_counter() - t0) * 1000
     sub(f"load {load2_ms:.0f} ms")
 
